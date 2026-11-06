@@ -88,13 +88,14 @@ export const worldExecutors: Record<string, Exec> = {
     if (!f) return "Error: the weather service didn't answer; try again in a bit.";
     credit(ctx, WEATHER_CREDIT[f.source]);
     const hours = a.day ? f.hours.filter((h) => h.at.startsWith(a.day!)) : f.hours.slice(0, 24);
-    const days = f.days.slice(0, 10);
+    // MET Norway gives no rain chance; leave the empty field out rather than show null.
+    const days = f.days.slice(0, 10).map(({ rainChance, ...d }) => (rainChance == null ? d : { ...d, rainChance }));
     if (a.day && !days.some((d) => d.date === a.day)) return JSON.stringify({ place: where.label, note: `No forecast for ${a.day} yet (forecasts reach ${days.at(-1)?.date ?? "a few days"}).`, days });
     return JSON.stringify({
       place: where.label,
       units: "°C, mm of rain, km/h",
       days,
-      ...(hours.length ? { hours: hours.map((h) => ({ ...h, at: h.at.slice(11, 16), day: h.at.slice(0, 10) })) } : {}),
+      ...(hours.length ? { hours: hours.map(({ rainChance, ...h }) => ({ ...h, ...(rainChance == null ? {} : { rainChance }), at: h.at.slice(11, 16), day: h.at.slice(0, 10) })) } : {}),
       ...(f.source === "met" ? { note: "No rain chance in this forecast; use the rain amounts." } : {}),
     });
   },
@@ -139,7 +140,7 @@ export const worldExecutors: Record<string, Exec> = {
       km: Math.round(eta.meters / 100) / 10,
       ...(arriveBy ? { arrive_by: hm(arriveBy), leave_by: hm(arriveBy.minus({ minutes })) } : {}),
       ...(leaveAt ? { arrive_around: hm(leaveAt.plus({ minutes })) } : {}),
-      note: "Suggest leaving a few minutes earlier than leave_by (parking, finding the room).",
+      ...(arriveBy ? { note: "Suggest leaving a few minutes earlier than leave_by (parking, finding the room)." } : {}),
     });
   },
 };
