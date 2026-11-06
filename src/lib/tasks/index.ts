@@ -2,7 +2,7 @@
  * Projects, tasks and links for one user. Everything here is scoped by user id; the actions in
  * src/app/dashboard/actions.ts do the validation and the writes.
  */
-import { and, asc, eq, gte, inArray, like, lt, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, like, lt, lte, or } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { db, projects, taskLinks, tasks, type Project, type Task, type TaskLink, type TaskStatus, type User } from "@/db";
 import { nextDue } from "../planner/core";
@@ -94,8 +94,13 @@ export type Alert = { taskId: number; title: string; at: string };
  * Alerts in [from, to): open tasks and reminders with an alert time, and the nudges of "every n hours" reminders
  * (each day from the one it's due, or today when that has passed). What the apps and the web page notify about.
  */
-export async function upcomingAlerts(user: Pick<User, "id" | "timezone">, from: Date, to: Date): Promise<Alert[]> {
-  const [timed, nudges] = await Promise.all([
+export async function upcomingAlerts(user: Pick<User, "id" | "timezone" | "doriPrefs">, from: Date, to: Date): Promise<Alert[]> {
+  const tz = user.timezone;
+  // A heads-up n days before every due date, at 9 am (a setting the user can ask Dori for).
+  const ahead = user.doriPrefs?.dueHeadsUpDays ?? 0;
+  const dueFrom = DateTime.fromJSDate(from, { zone: tz }).plus({ days: ahead }).toISODate()!;
+  const dueTo = DateTime.fromJSDate(to, { zone: tz }).plus({ days: ahead }).toISODate()!;
+  const [timed, nudges, due] = await Promise.all([
     db
       .select({ id: tasks.id, title: tasks.title, remindAt: tasks.remindAt })
       .from(tasks)
@@ -107,9 +112,19 @@ export async function upcomingAlerts(user: Pick<User, "id" | "timezone">, from: 
       .from(tasks)
       .where(and(eq(tasks.userId, user.id), eq(tasks.status, "open"), like(tasks.repeat, "hours:%")))
       .limit(20),
+    ahead
+      ? db
+          .select({ id: tasks.id, title: tasks.title, dueDate: tasks.dueDate })
+          .from(tasks)
+          .where(and(eq(tasks.userId, user.id), eq(tasks.status, "open"), gte(tasks.dueDate, dueFrom), lte(tasks.dueDate, dueTo)))
+          .limit(30)
+      : Promise.resolve([]),
   ]);
   const out: Alert[] = timed.map((r) => ({ taskId: r.id, title: r.title, at: r.remindAt!.toISOString() }));
-  const tz = user.timezone;
+  for (const d of due) {
+    const at = DateTime.fromISO(d.dueDate!, { zone: tz }).minus({ days: ahead }).set({ hour: 9 }).toMillis();
+    if (at >= from.getTime() && at < to.getTime()) out.push({ taskId: d.id, title: `Due ${ahead === 1 ? "tomorrow" : `in ${ahead} days`}: ${d.title}`, at: new Date(at).toISOString() });
+  }
   const today = DateTime.now().setZone(tz).toISODate()!;
   for (const n of nudges) {
     let day = DateTime.fromISO(n.dueDate && n.dueDate > today ? n.dueDate : today, { zone: tz });
@@ -121,7 +136,7 @@ export async function upcomingAlerts(user: Pick<User, "id" | "timezone">, from: 
 }
 
 /** Alerts from a few minutes ago to a day and a half ahead, for the open web page. */
-export function alertsSoon(user: Pick<User, "id" | "timezone">) {
+export function alertsSoon(user: Pick<User, "id" | "timezone" | "doriPrefs">) {
   const now = Date.now();
   return upcomingAlerts(user, new Date(now - 10 * 60_000), new Date(now + 36 * 3_600_000));
 }

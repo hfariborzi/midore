@@ -96,6 +96,10 @@ async function apply(userId: number, op: UndoOp) {
       if (!(await db.select({ id: bookings.id }).from(bookings).where(eq(bookings.eventTypeId, op.id)).limit(1)).length)
         await db.delete(eventTypes).where(and(eq(eventTypes.id, op.id), eq(eventTypes.userId, userId)));
       break;
+    case "deleteSchedule":
+      // Pages using it fall back to the default hours (schedule_id is set null).
+      await db.delete(schedules).where(and(eq(schedules.id, op.id), eq(schedules.userId, userId), eq(schedules.isDefault, false)));
+      break;
     case "patchSchedule":
       await db.update(schedules).set(op.fields as Partial<typeof schedules.$inferInsert>).where(and(eq(schedules.id, op.id), eq(schedules.userId, userId)));
       break;

@@ -8,10 +8,15 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { db, bookings, eventTypes, schedules, type DateOverride, type TimeRange } from "@/db";
 import type { ToolDef } from "../ai/client";
-import { calendarsForAccounts, listAccounts, writeTargets } from "../calendar";
+import { calendarsForAccounts, eventsForAccounts, listAccounts, writeTargets } from "../calendar";
 import type { Recurrence } from "../calendar/recurrence";
 import { appUrl } from "../config";
 import { ensureDefaults, listEventTypes, listSchedules } from "../data";
+import { fetchFeed, parseIcs } from "../feeds";
+import { eventKey, labelEvents, listCategories } from "../labels";
+import { planBlocks } from "../plan-view";
+import { todayIn } from "../planner";
+import { listTasks } from "../tasks";
 import type { ToolContext } from "./tools";
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD");
@@ -41,10 +46,16 @@ export const CALENDAR_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "propose_event_change", description: "Offer to move or delete one of the user's own calendar events (one with no other guests). It changes only when they confirm. For events with other people, use draft_emails instead.", parameters: S.obj({
     event_ref: S.str("e.g. e3"), action: S.enum(["move", "delete"]), day: S.str("Move: YYYY-MM-DD"), start: S.str("Move: HH:mm"), end: S.str("Move: HH:mm"),
   }, ["event_ref", "action"]) } },
+  { type: "function", function: { name: "respond_to_invite", description: "Offer to accept, decline or say maybe to an invitation the user got; the organizer is told when the user confirms.", parameters: S.obj({
+    event_ref: S.str("e.g. e3"), response: S.enum(["accepted", "declined", "tentative"]), comment: S.str("Optional short note to the organizer"),
+  }, ["event_ref", "response"]) } },
+  { type: "function", function: { name: "read_calendar_feed", description: "Read a calendar link the user pasted (Canvas, D2L, Moodle, Outlook or any .ics / webcal link) and return its upcoming items, so you can propose_plan them as tasks with due dates.", parameters: S.obj({ url: S.str() }, ["url"]) } },
+  { type: "function", function: { name: "time_report", description: "Where time went (or is going) between two days: meeting hours by area and by calendar, planned work hours by area, and tasks finished per area.", parameters: S.obj({ from_day: S.str("YYYY-MM-DD"), to_day: S.str("YYYY-MM-DD") }, ["from_day", "to_day"]) } },
   { type: "function", function: { name: "list_booking_pages", description: "The user's booking pages (the links people use to book time with them): title, lengths, link, on or off.", parameters: S.obj({}) } },
   { type: "function", function: { name: "create_booking_page", description: "Make a new booking page (a link people use to book time with the user), with a video link by default. The user can fine-tune it under Booking pages.", parameters: S.obj({
     title: S.str("e.g. Office hours"), minutes: S.arr(S.int(), "Lengths people can pick"), description: S.str("One or two lines shown to people booking"),
     in_person_address: S.str("Instead of a video call"), secret: S.bool("Not listed on the profile page; only people with the link"),
+    hours: S.arr(hoursItem, "When this page can be booked, if not the default booking hours"),
   }, ["title", "minutes"]) } },
   { type: "function", function: { name: "update_booking_page", description: "Turn booking pages on or off (pause them while away), or change a page's lengths, notice, how far ahead, or daily limit.", parameters: S.obj({
     ids: S.arr(S.int(), "Booking page ids"), active: S.bool("false pauses the page"), durations: S.arr(S.int(), "Minutes"),
@@ -61,7 +72,10 @@ export const CALENDAR_TOOL_DEFS: ToolDef[] = [
 export const CALENDAR_TOOL_STATUS: Record<string, string> = {
   propose_calendar_event: "Preparing an event",
   propose_event_change: "Preparing the change",
+  respond_to_invite: "Preparing your reply",
   list_booking_pages: "Looking at your booking pages",
+  read_calendar_feed: "Reading that calendar",
+  time_report: "Adding up your time",
   create_booking_page: "Making a booking page",
   update_booking_page: "Updating your booking pages",
   block_booking_time: "Blocking booking time",
@@ -75,6 +89,20 @@ function localInstant(tz: string, d: string, hm: string) {
 }
 
 const pageUrl = (username: string, slug: string) => `${appUrl()}/${username}/${slug}`;
+
+function toWeekly(days: { weekday: number; start: string; end: string }[]): Record<string, TimeRange[]> {
+  const weekly: Record<string, TimeRange[]> = { "1": [], "2": [], "3": [], "4": [], "5": [], "6": [], "7": [] };
+  for (const d of days) if (d.end > d.start) weekly[String(d.weekday)].push({ start: d.start, end: d.end });
+  return weekly;
+}
+
+/** Give one booking page hours of its own (a new schedule in the user's time zone), with undo. */
+async function ownSchedule(ctx: ToolContext, et: { id: number; title: string; scheduleId: number | null }, weekly: Record<string, TimeRange[]>) {
+  const [row] = await db.insert(schedules).values({ userId: ctx.user.id, name: `${et.title} hours`.slice(0, 80), timezone: ctx.user.timezone, weekly }).returning({ id: schedules.id });
+  await db.update(eventTypes).set({ scheduleId: row.id }).where(and(eq(eventTypes.id, et.id), eq(eventTypes.userId, ctx.user.id)));
+  ctx.undo.push({ op: "deleteSchedule", id: row.id }, { op: "patchEventType", id: et.id, fields: { scheduleId: et.scheduleId } });
+  return row.id;
+}
 
 /** Every schedule a booking page can use: the user's schedules, the default created if missing. */
 async function allSchedules(ctx: ToolContext) {
@@ -138,6 +166,65 @@ export const calendarExecutors: Record<string, Exec> = {
     return `Shown to the user with a ${a.action === "move" ? "Move" : "Delete"} button; nothing changes until they press it.`;
   },
 
+  async respond_to_invite(ctx, raw) {
+    const a = z.object({ event_ref: z.string().max(10), response: z.enum(["accepted", "declined", "tentative"]), comment: opt(z.string().max(300)) }).parse(raw);
+    const ev = ctx.refs.get(a.event_ref);
+    if (!ev) return "Error: no such event; use a ref from the calendar data or list_meetings.";
+    if (!ev.attendees.length) return "Error: that event has no guests; it's the user's own. Use propose_event_change to move or delete it.";
+    ctx.cards.push({ kind: "rsvp", response: a.response, comment: a.comment ?? "", title: ev.title, accountId: ev.accountId, calendarId: ev.calendarId, eventId: ev.id, start: ev.start, end: ev.end, status: "pending" });
+    return "Shown to the user with a button to send the reply; nothing is sent until they press it.";
+  },
+
+  async read_calendar_feed(ctx, raw) {
+    const a = z.object({ url: z.string().trim().min(8).max(2000) }).parse(raw);
+    const got = await fetchFeed(a.url);
+    if ("error" in got) return `Error: ${got.error}`;
+    const items = parseIcs(got.text, ctx.user.timezone, todayIn(ctx.user.timezone));
+    if (!items.length) return "The calendar has nothing coming up in the next four months.";
+    return JSON.stringify({ upcoming: items, note: "Offer these as tasks with due dates (propose_plan), in a project named after the course or source; skip lectures and other regular classes unless asked." });
+  },
+
+  async time_report(ctx, raw) {
+    const a = z.object({ from_day: day, to_day: day }).parse(raw);
+    const tz = ctx.user.timezone;
+    const from = DateTime.fromISO(a.from_day, { zone: tz }).startOf("day");
+    let to = DateTime.fromISO(a.to_day, { zone: tz }).endOf("day");
+    if (to.diff(from, "days").days > 31) to = from.plus({ days: 31 }).endOf("day");
+    const [{ events }, blocks, all, areas] = await Promise.all([
+      listAccounts(ctx.user.id).then((accounts) => eventsForAccounts(ctx.user, accounts, from.toJSDate(), to.toJSDate())),
+      planBlocks(ctx.user, from.toMillis(), to.toMillis()),
+      listTasks(ctx.user.id),
+      listCategories(ctx.user.id),
+    ]);
+    const { labels } = await labelEvents(ctx.user.id, events);
+    const name = (id: number | null | undefined) => areas.find((c) => c.id === id)?.name ?? "No area";
+    const add = (m: Record<string, number>, k: string, min: number) => (m[k] = (m[k] ?? 0) + min);
+    const h = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).sort((x, y) => y[1] - x[1]).map(([k, v]) => [k, Math.round(v / 6) / 10]));
+    const meetingsByArea: Record<string, number> = {};
+    const meetingsByCalendar: Record<string, number> = {};
+    for (const e of events.filter((x) => !x.allDay)) {
+      const min = (Date.parse(e.end) - Date.parse(e.start)) / 60_000;
+      add(meetingsByArea, name(labels[`${e.accountId}:${eventKey(e)}`]?.categoryId), min);
+      add(meetingsByCalendar, e.calendarName ?? "Calendar", min);
+    }
+    const workByArea: Record<string, number> = {};
+    const now = Date.now();
+    let workDone = 0;
+    for (const b of blocks) {
+      const min = (Date.parse(b.end) - Date.parse(b.start)) / 60_000;
+      add(workByArea, name(b.categoryId), min);
+      if (Date.parse(b.end) <= now && b.status !== "open") workDone += min;
+    }
+    const finished: Record<string, number> = {};
+    for (const t of all) if (t.completedAt && t.status !== "dropped" && t.completedAt >= from.toJSDate() && t.completedAt <= to.toJSDate()) finished[name(t.categoryId)] = (finished[name(t.categoryId)] ?? 0) + 1;
+    return JSON.stringify({
+      from: from.toISODate(), to: to.toISODate(),
+      meeting_hours_by_area: h(meetingsByArea), meeting_hours_by_calendar: h(meetingsByCalendar),
+      planned_work_hours_by_area: h(workByArea), planned_work_hours_already_finished: Math.round(workDone / 6) / 10,
+      tasks_finished_by_area: finished,
+    });
+  },
+
   async list_booking_pages(ctx) {
     const list = await listEventTypes(ctx.user.id);
     if (!list.length) return "The user has no booking pages yet; they can make one under Booking pages.";
@@ -148,6 +235,7 @@ export const calendarExecutors: Record<string, Exec> = {
     const a = z.object({
       title: z.string().trim().min(1).max(120), minutes: z.array(z.number().int().min(5).max(720)).min(1).max(6),
       description: opt(z.string().max(1000)), in_person_address: opt(z.string().trim().max(300)), secret: opt(z.boolean()),
+      hours: opt(z.array(z.object({ weekday: z.number().int().min(1).max(7), start: time, end: time })).max(21)),
     }).parse(raw);
     const list = await listEventTypes(ctx.user.id);
     if (list.length >= 50) return "Error: that's the most booking pages one account can have.";
@@ -163,8 +251,9 @@ export const calendarExecutors: Record<string, Exec> = {
       })
       .returning({ id: eventTypes.id });
     ctx.undo.push({ op: "deleteEventType", id: row.id });
+    if (a.hours?.length) await ownSchedule(ctx, { id: row.id, title: a.title, scheduleId: null }, toWeekly(a.hours));
     ctx.actions.push(`Made booking page "${a.title}"`);
-    return JSON.stringify({ id: row.id, link: pageUrl(ctx.user.username, slug), note: "It uses the default booking hours; give the link and say they can adjust it under Booking pages." });
+    return JSON.stringify({ id: row.id, link: pageUrl(ctx.user.username, slug), note: `${a.hours?.length ? "It has its own hours" : "It uses the default booking hours"}; give the link and say they can adjust it under Booking pages.` });
   },
 
   async update_booking_page(ctx, raw) {
@@ -213,14 +302,20 @@ export const calendarExecutors: Record<string, Exec> = {
     const a = z.object({ page_id: opt(z.number().int()), days: z.array(z.object({ weekday: z.number().int().min(1).max(7), start: time, end: time })).max(21) }).parse(raw);
     const all = await allSchedules(ctx);
     let sc = all.find((x) => x.isDefault) ?? all[0];
+    const weekly = toWeekly(a.days);
     if (a.page_id !== undefined) {
       const et = (await listEventTypes(ctx.user.id)).find((x) => x.id === a.page_id);
       if (!et) return "Error: no such booking page.";
-      sc = all.find((x) => x.id === et.scheduleId) ?? sc;
+      const own = all.find((x) => x.id === et.scheduleId && !x.isDefault);
+      if (!own) {
+        // The page shares the default hours: give it hours of its own instead of changing every page.
+        const id = await ownSchedule(ctx, et, weekly);
+        ctx.actions.push(`"${et.title}" has its own booking hours now`);
+        return `saved (new hours for this page only, schedule #${id})`;
+      }
+      sc = own;
     }
     if (!sc) return "Error: no booking hours to change.";
-    const weekly: Record<string, TimeRange[]> = { "1": [], "2": [], "3": [], "4": [], "5": [], "6": [], "7": [] };
-    for (const d of a.days) if (d.end > d.start) weekly[String(d.weekday)].push({ start: d.start, end: d.end });
     await db.update(schedules).set({ weekly }).where(and(eq(schedules.id, sc.id), eq(schedules.userId, ctx.user.id)));
     ctx.undo.push({ op: "patchSchedule", id: sc.id, fields: { weekly: sc.weekly } });
     ctx.actions.push(`Changed booking hours (${sc.name})`);

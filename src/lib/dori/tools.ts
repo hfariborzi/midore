@@ -63,7 +63,10 @@ const taskFields = {
   people: opt(z.array(z.string().trim().min(1).max(120)).max(20)),
   repeat: opt(repeat),
   remind_at: opt(z.union([localDateTime, z.literal("none")])),
+  waiting_on: opt(z.string().trim().max(120)),
+  checklist: opt(z.array(z.union([z.string().trim().min(1).max(200), z.object({ text: z.string().trim().min(1).max(200), done: z.boolean().default(false) })])).max(30)),
 };
+const toChecklist = (list: (string | { text: string; done: boolean })[]) => list.map((i) => (typeof i === "string" ? { text: i, done: false } : i));
 
 // JSON schemas for the model. Kept plain (no strict mode) so every OpenAI-compatible provider accepts them.
 const S = {
@@ -91,6 +94,8 @@ const taskProps = {
     "Leave out unless the user said it repeats. daily | weekdays | weekly | biweekly | monthly | yearly | days:1,3,5 (ISO weekdays, 1 = Monday) | nth:2:2 (2nd Tuesday of the month; nth:-1:5 = last Friday) | every:3 (every 3 days) | times:3 (3 times a week, any days) | hours:2:09:00-21:00 (a nudge every 2 hours between those times, every day)",
   ),
   remind_at: S.str("YYYY-MM-DDTHH:mm, user's local time: when to alert them (\"remind me at 6\", \"in 2 hours\"). \"none\" removes the alert"),
+  waiting_on: S.str("Who or what it waits for (\"Ali's draft\"); it isn't planned until cleared. \"none\" clears it"),
+  checklist: S.arr({ anyOf: [{ type: "string" }, S.obj({ text: S.str(), done: S.bool }, ["text", "done"])] }, "Small steps inside the task. On update this replaces the whole list: send every item with its done state"),
 };
 
 const TASK_TOOL_DEFS: ToolDef[] = [
@@ -109,14 +114,20 @@ const TASK_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "delete_project", description: "Delete a project and all its tasks. Only when the user asked to delete it (finishing or pausing keeps it).", parameters: S.obj({ id: S.int() }, ["id"]) } },
   { type: "function", function: { name: "create_area", description: "Create a new area of life (e.g. Research, Home). Areas also colour the calendar.", parameters: S.obj({ name: S.str(), description: S.str() }, ["name"]) } },
   { type: "function", function: { name: "update_area", description: "Rename an area, change its description or colour.", parameters: S.obj({ id: S.int(), name: S.str(), description: S.str(), color: S.str("A colour name (red, orange, yellow, green, teal, blue, purple, pink, brown, grey) or #rrggbb") }, ["id"]) } },
-  { type: "function", function: { name: "delete_area", description: "Delete an area. Its projects and tasks stay, with no area. Ask the user first: it also forgets which events were labelled with it.", parameters: S.obj({ id: S.int() }, ["id"]) } },
+  { type: "function", function: { name: "delete_area", description: "Offer to delete an area (the user confirms on a card). Its projects and tasks stay, with no area; events labelled with it lose the label.", parameters: S.obj({ id: S.int() }, ["id"]) } },
   { type: "function", function: { name: "find_tasks", description: "Search all tasks, including finished ones and ones beyond what you were given: history (\"what did I do last month\", \"when did I last call Dad\"), finished tasks to reopen, old reminders, tasks that keep getting pushed.", parameters: S.obj({
     text: S.str("Words in the title"), status: S.enum(["open", "finished", "any"]), finished_from: S.str("YYYY-MM-DD"), finished_to: S.str("YYYY-MM-DD"),
     created_before: S.str("YYYY-MM-DD"), area: idOrName("Area"), project: idOrName("Project"), kind: S.enum(["task", "reminder"]), repeating: S.bool,
-    sort: S.enum(["recent", "most_pushed", "due"]), limit: S.int("Default 30, at most 100"),
+    waiting: S.bool, sort: S.enum(["recent", "most_pushed", "due"]), limit: S.int("Default 30, at most 100"),
   }) } },
   { type: "function", function: { name: "habit_stats", description: "How repeating tasks and habits are going: completions per week, this week's count, current streak, last done.", parameters: S.obj({ text: S.str("Words in the habit's title; omit for all"), weeks: S.int("How many weeks back, default 8") }) } },
-  { type: "function", function: { name: "set_preferences", description: "Change how Dori greets the user, her character, or the user's time zone (when they travel or move).", parameters: S.obj({ nickname: S.str("Empty to use their first name"), character: S.enum(["puppy", "kitten"]), timezone: S.str("IANA name, e.g. America/Toronto") }) } },
+  { type: "function", function: { name: "set_preferences", description: "Change how Dori greets the user, her character, the language and style she always answers in, the user's time zone (when they travel or move), the time of the daily morning brief, or a heads-up before every due date. Send only the fields to change.", parameters: S.obj({
+    nickname: S.str("What to call them; \"first name\" to go back to their first name"), character: S.enum(["puppy", "kitten"]),
+    language: S.str("Always answer in this language (e.g. \"fa\", \"French\"); \"auto\" = the language of their last message"),
+    style: S.str("How to talk to them from now on, in their words (\"shorter\", \"like a coach\"); \"default\" to go back"),
+    timezone: S.str("IANA name, e.g. America/Toronto"), brief_time: S.str("HH:mm, or \"off\""),
+    due_heads_up_days: S.int("Alert this many days before every due date (0 = off)"),
+  }) } },
   { type: "function", function: { name: "link_tasks", description: "Say one task must be done before another, or that tasks go together.", parameters: S.obj({ before: S.int("Task id that comes first"), after: S.int("Task id that comes after"), together: S.arr(S.int(), "Instead of before/after: two task ids that go together") }) } },
   { type: "function", function: { name: "add_day_note", description: "Remember something about a day, a range of days, a weekday or always: moods (\"not in the mood for writing today\"), days kept for one thing, a cap on work, when the day starts or ends, time kept for a project (\"Wednesday mornings for writing\"), a vacation. The planner follows the structured fields.", parameters: S.obj({
     day: S.str("YYYY-MM-DD; omit for a standing note"), to_day: S.str("YYYY-MM-DD: the same note for every day from day to to_day (at most 60)"),
@@ -193,6 +204,7 @@ const executors: Record<string, Exec> = {
       tasks: z.array(z.object({ ...taskFields, project: opt(z.string().max(120)), area: opt(z.string().max(60)) })).max(150).default([]),
       links: z.array(z.object({ before: z.number().int(), after: z.number().int() })).max(100).default([]),
     }).parse(raw);
+    if (!a.tasks.length) return "Error: nothing to propose. If the user hasn't said what's on their plate yet, ask them; otherwise use the right tool for what they asked.";
     ctx.proposal = {
       areas: a.areas,
       projects: a.projects.map((p) => ({ ref: p.ref, name: p.name, area: p.area, targetDate: p.target_date ?? null, notes: p.notes })),
@@ -233,7 +245,8 @@ const executors: Record<string, Exec> = {
           userId: ctx.user.id, projectId: project ? project.id : null, categoryId: area, title: t.title, notes: t.notes ?? "", kind,
           estimateMinutes: kind === "reminder" ? null : (t.estimate_minutes ?? null), dueDate, hardDeadline: t.hard_deadline ?? false,
           priority: t.priority ?? "normal", energy: t.energy ?? null, people: t.people ?? [], repeat: t.repeat ?? null,
-          remindAt: remindAt?.isValid ? remindAt.toJSDate() : null, position: position++,
+          remindAt: remindAt?.isValid ? remindAt.toJSDate() : null, waitingOn: t.waiting_on && t.waiting_on !== "none" ? t.waiting_on : null,
+          checklist: toChecklist(t.checklist ?? []), position: position++,
         })
         .returning({ id: tasks.id });
       ctx.undo.push({ op: "deleteTask", id: row.id });
@@ -268,6 +281,8 @@ const executors: Record<string, Exec> = {
       if (deferred(task.dueDate, a.due_date)) fields.deferCount = task.deferCount + 1;
     }
     if (a.progress !== undefined) fields.progress = a.progress;
+    if (a.waiting_on !== undefined) fields.waitingOn = a.waiting_on === "none" || !a.waiting_on ? null : a.waiting_on;
+    if (a.checklist !== undefined) fields.checklist = toChecklist(a.checklist);
     if (a.remind_at !== undefined) {
       const at = a.remind_at === "none" ? null : localInstant(ctx.user, a.remind_at.slice(0, 10), a.remind_at.slice(11));
       if (at && !at.isValid) return "Error: invalid alert time.";
@@ -429,22 +444,16 @@ const executors: Record<string, Exec> = {
     const a = z.object({ id: z.number().int() }).parse(raw);
     const c = (await listCategories(ctx.user.id)).find((x) => x.id === a.id);
     if (!c) return "Error: no such area.";
-    const [taskRows, projectRows] = await Promise.all([
-      db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.userId, ctx.user.id), eq(tasks.categoryId, c.id))),
-      db.select({ id: projects.id }).from(projects).where(and(eq(projects.userId, ctx.user.id), eq(projects.categoryId, c.id))),
-    ]);
-    ctx.undo.push({ op: "restoreCategory", row: { ...c, createdAt: c.createdAt.toISOString() }, taskIds: taskRows.map((r) => r.id), projectIds: projectRows.map((r) => r.id) });
-    await db.delete(categories).where(and(eq(categories.id, c.id), eq(categories.userId, ctx.user.id)));
-    ctx.actions.push(`Deleted area "${c.name}"`);
-    ctx.changed = true;
-    return `deleted; ${projectRows.length} projects and ${taskRows.length} tasks now have no area`;
+    // Deleting an area also forgets which events were labelled with it, so the user confirms it on a card.
+    ctx.cards.push({ kind: "delete_area", id: c.id, name: c.name, status: "pending" });
+    return "Shown to the user with a Delete area button; nothing is deleted until they press it.";
   },
 
   async find_tasks(ctx, raw) {
     const a = z.object({
       text: opt(z.string().trim().max(100)), status: opt(z.enum(["open", "finished", "any"])), finished_from: opt(day), finished_to: opt(day), created_before: opt(day),
       area: opt(z.union([z.number().int(), z.string().max(60)])), project: opt(z.union([z.number().int(), z.string().max(120)])), kind: opt(z.enum(["task", "reminder"])),
-      repeating: opt(z.boolean()), sort: opt(z.enum(["recent", "most_pushed", "due"])), limit: opt(z.number().int().min(1).max(100)),
+      repeating: opt(z.boolean()), waiting: opt(z.boolean()), sort: opt(z.enum(["recent", "most_pushed", "due"])), limit: opt(z.number().int().min(1).max(100)),
     }).parse(raw ?? {});
     const tz = ctx.user.timezone;
     const [all, areas, projectList] = await Promise.all([listTasks(ctx.user.id), listCategories(ctx.user.id), listProjects(ctx.user.id)]);
@@ -465,6 +474,7 @@ const executors: Record<string, Exec> = {
       if (project && t.projectId !== project.id) return false;
       if (a.kind && t.kind !== a.kind) return false;
       if (a.repeating !== undefined && !!t.repeat !== a.repeating) return false;
+      if (a.waiting !== undefined && !!t.waitingOn !== a.waiting) return false;
       return words.every((w) => t.title.toLowerCase().includes(w) || t.notes.toLowerCase().includes(w));
     });
     const sort = a.sort ?? (a.status === "open" ? "due" : "recent");
@@ -475,7 +485,7 @@ const executors: Record<string, Exec> = {
     const out = rows.slice(0, limit).map((t) => ({
       id: t.id, title: t.title.slice(0, 120), status: t.status, ...(t.kind === "reminder" ? { reminder: true } : {}),
       ...(t.dueDate ? { due: t.dueDate } : {}), ...(t.completedAt ? { finished: localDay(t.completedAt) } : {}), created: localDay(t.createdAt),
-      ...(t.deferCount ? { pushed: t.deferCount } : {}), ...(t.repeat ? { repeat: t.repeat } : {}), ...(t.residue ? { left: t.residue } : {}),
+      ...(t.deferCount ? { pushed: t.deferCount } : {}), ...(t.repeat ? { repeat: t.repeat } : {}), ...(t.residue ? { left: t.residue } : {}), ...(t.waitingOn ? { waiting_on: t.waitingOn } : {}),
     }));
     return JSON.stringify({ matches: rows.length, shown: out.length, tasks: out });
   },
@@ -523,9 +533,19 @@ const executors: Record<string, Exec> = {
   },
 
   async set_preferences(ctx, raw) {
-    const a = z.object({ nickname: opt(z.string().trim().max(40)), character: opt(z.enum(["puppy", "kitten"])), timezone: opt(z.string().trim().max(60)) }).parse(raw ?? {});
+    const a = z.object({
+      nickname: opt(z.string().trim().min(1).max(40)), character: opt(z.enum(["puppy", "kitten"])), language: opt(z.string().trim().min(2).max(40)), style: opt(z.string().trim().min(1).max(200)),
+      timezone: opt(z.string().trim().max(60)), brief_time: opt(z.union([time, z.literal("off")])), due_heads_up_days: opt(z.number().int().min(0).max(14)),
+    }).parse(raw ?? {});
     const fields: Partial<User> = {};
-    if (a.nickname !== undefined || a.character) fields.doriPrefs = { nickname: a.nickname ?? ctx.user.doriPrefs?.nickname ?? "", character: a.character ?? ctx.user.doriPrefs?.character };
+    const prefs = { nickname: "", ...ctx.user.doriPrefs };
+    if (a.nickname !== undefined) prefs.nickname = /^first name$/i.test(a.nickname) ? "" : a.nickname;
+    if (a.character) prefs.character = a.character;
+    if (a.language) prefs.language = a.language.toLowerCase() === "auto" ? null : a.language;
+    if (a.style) prefs.style = a.style.toLowerCase() === "default" ? null : a.style;
+    if (a.brief_time) prefs.briefAt = a.brief_time === "off" ? null : a.brief_time;
+    if (a.due_heads_up_days !== undefined) prefs.dueHeadsUpDays = a.due_heads_up_days || null;
+    if (a.nickname !== undefined || a.character || a.language || a.style || a.brief_time || a.due_heads_up_days !== undefined) fields.doriPrefs = prefs;
     if (a.timezone !== undefined) {
       if (!validTimezone(a.timezone)) return "Error: unknown time zone; use an IANA name like America/Toronto.";
       fields.timezone = a.timezone;
@@ -538,7 +558,12 @@ const executors: Record<string, Exec> = {
       ctx.actions.push(`Time zone set to ${fields.timezone}`);
       ctx.changed = true;
     }
-    if (fields.doriPrefs) ctx.actions.push(a.character ? `Dori is now a ${a.character}` : "Changed how Dori greets you");
+    if (a.brief_time) ctx.actions.push(a.brief_time === "off" ? "Turned off the morning brief" : `Morning brief at ${DateTime.fromISO(`2000-01-01T${a.brief_time}`).toFormat("h:mm a")}`);
+    if (a.character) ctx.actions.push(`Dori is now a ${a.character}`);
+    if (a.nickname !== undefined) ctx.actions.push("Changed how Dori greets you");
+    if (a.language) ctx.actions.push(prefs.language ? `Dori answers in ${prefs.language}` : "Dori answers in the language you write in");
+    if (a.style) ctx.actions.push(prefs.style ? `Dori's style: ${prefs.style}` : "Dori's usual style");
+    if (a.due_heads_up_days !== undefined) ctx.actions.push(prefs.dueHeadsUpDays ? `Heads-up ${prefs.dueHeadsUpDays} day${prefs.dueHeadsUpDays > 1 ? "s" : ""} before due dates` : "No heads-up before due dates");
     return "saved";
   },
 
@@ -704,6 +729,18 @@ const executors: Record<string, Exec> = {
   },
 
 };
+
+/** Delete an area after the user confirmed Dori's card. Its tasks and projects stay, with no area. Returns how to undo it. */
+export async function deleteAreaConfirmed(userId: number, id: number): Promise<UndoOp | null> {
+  const c = (await listCategories(userId)).find((x) => x.id === id);
+  if (!c) return null;
+  const [taskRows, projectRows] = await Promise.all([
+    db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.userId, userId), eq(tasks.categoryId, c.id))),
+    db.select({ id: projects.id }).from(projects).where(and(eq(projects.userId, userId), eq(projects.categoryId, c.id))),
+  ]);
+  await db.delete(categories).where(and(eq(categories.id, c.id), eq(categories.userId, userId)));
+  return { op: "restoreCategory", row: { ...c, createdAt: c.createdAt.toISOString() }, taskIds: taskRows.map((r) => r.id), projectIds: projectRows.map((r) => r.id) };
+}
 
 export async function runTool(ctx: ToolContext, name: string, argsJson: string): Promise<string> {
   const exec = executors[name] ?? calendarExecutors[name];

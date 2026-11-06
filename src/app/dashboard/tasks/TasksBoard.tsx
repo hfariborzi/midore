@@ -305,7 +305,7 @@ function TaskRow({ task, ...ctx }: Ctx & { task: Task }) {
             </form>
           )}
           {task.status === "good_enough" && task.residue && <p className="text-xs text-accent-soft">Left: {task.residue}</p>}
-          {(due || task.estimateMinutes || task.priority === "high" || blocked || after.length > 0 || together > 0 || task.kind === "reminder" || task.people.length > 0 || task.remindAt || task.repeat) && !done && (
+          {(due || task.estimateMinutes || task.priority === "high" || blocked || after.length > 0 || together > 0 || task.kind === "reminder" || task.people.length > 0 || task.remindAt || task.repeat || task.waitingOn || task.checklist.length > 0) && !done && (
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-faint">
               {task.kind === "reminder" && !task.remindAt && <span className="inline-flex items-center gap-1"><Bell size={11} /> reminder</span>}
               {task.remindAt && <span className="inline-flex items-center gap-1 tnum"><Bell size={11} /> {new Date(task.remindAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}
@@ -318,6 +318,8 @@ function TaskRow({ task, ...ctx }: Ctx & { task: Task }) {
               {!blocked && after.length > 0 && <span className="inline-flex items-center gap-1"><Link2 size={11} /> after {after.map((a) => a.title).join(", ")}</span>}
               {together > 0 && <span className="inline-flex items-center gap-1"><Link2 size={11} /> with {together} other{together > 1 ? "s" : ""}</span>}
               {task.people.length > 0 && <span>{task.people.join(", ")}</span>}
+              {task.waitingOn && <span className="text-warning">Waiting on {task.waitingOn}</span>}
+              {task.checklist.length > 0 && <span className="tnum">{task.checklist.filter((c) => c.done).length}/{task.checklist.length} steps</span>}
             </div>
           )}
         </div>
@@ -433,7 +435,9 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
     id: task.id, projectId: task.projectId, categoryId: task.categoryId, title: task.title, notes: task.notes, kind: task.kind,
     estimateMinutes: task.estimateMinutes, dueDate: task.dueDate, hardDeadline: task.hardDeadline, priority: task.priority, energy: task.energy, people: task.people, repeat: task.repeat,
     remindTime: task.remindAt ? new Date(task.remindAt).toTimeString().slice(0, 5) : null,
+    waitingOn: task.waitingOn, checklist: task.checklist,
   });
+  const [step, setStep] = useState("");
   const [linkTo, setLinkTo] = useState("");
   const [linkKind, setLinkKind] = useState<"before" | "together">("before");
   const upd = (patch: Partial<TaskInput>) => setD({ ...d, ...patch });
@@ -542,6 +546,41 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
       <div className="sm:col-span-2">
         <label className="label">People involved</label>
         <input className="input" placeholder="Names or emails, comma separated" value={d.people?.join(", ") ?? ""} onChange={(e) => upd({ people: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
+      </div>
+      <div>
+        <label className="label">Waiting on</label>
+        <input className="input" placeholder="Someone or something" maxLength={120} value={d.waitingOn ?? ""} onChange={(e) => upd({ waitingOn: e.target.value || null })} />
+        <p className="help">Not planned until this is cleared.</p>
+      </div>
+
+      <div className="sm:col-span-3">
+        <label className="label">Checklist</label>
+        <ul className="space-y-1 text-sm">
+          {(d.checklist ?? []).map((item, i) => (
+            <li key={i} className="flex items-center gap-2">
+              <input type="checkbox" checked={item.done} onChange={(e) => upd({ checklist: d.checklist!.map((x, j) => (j === i ? { ...x, done: e.target.checked } : x)) })} aria-label={`Done: ${item.text}`} />
+              <span className={item.done ? "text-faint line-through" : ""}>{item.text}</span>
+              <button type="button" className="ml-auto text-faint hover:text-danger" aria-label={`Remove ${item.text}`} onClick={() => upd({ checklist: d.checklist!.filter((_, j) => j !== i) })}><X size={14} /></button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-1.5 flex gap-2">
+          <input
+            className="input py-1 text-sm"
+            placeholder="Add a step"
+            maxLength={200}
+            value={step}
+            onChange={(e) => setStep(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && step.trim()) {
+                e.preventDefault();
+                upd({ checklist: [...(d.checklist ?? []), { text: step.trim(), done: false }] });
+                setStep("");
+              }
+            }}
+          />
+          <button type="button" className="btn-secondary py-1 text-xs" disabled={!step.trim() || (d.checklist?.length ?? 0) >= 30} onClick={() => { upd({ checklist: [...(d.checklist ?? []), { text: step.trim(), done: false }] }); setStep(""); }}>Add</button>
+        </div>
       </div>
 
       <div className="sm:col-span-3">

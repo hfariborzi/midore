@@ -549,6 +549,8 @@ const taskSchema = z.object({
   people: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
   repeat: z.string().refine(isRepeat, "Unknown repeat").nullable().default(null),
   remindTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(), // HH:mm on the due day (today when none); null = no alert
+  waitingOn: z.string().trim().max(120).nullable().optional().transform((v) => (v === "" ? null : v)),
+  checklist: z.array(z.object({ text: z.string().trim().min(1).max(200), done: z.boolean() })).max(30).optional(),
 });
 
 export type TaskInput = z.input<typeof taskSchema>;

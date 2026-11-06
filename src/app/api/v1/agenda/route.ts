@@ -1,9 +1,12 @@
 import { DateTime } from "luxon";
+import { and, eq } from "drizzle-orm";
+import { db, tasks } from "@/db";
 import { json, withDevice } from "@/lib/api-v1";
 import { eventsForAccounts, listAccounts } from "@/lib/calendar";
 import { eventKey, labelEvents } from "@/lib/labels";
 import { GRAPHITE, toPalette } from "@/lib/palette";
 import { blockState, planBlocks } from "@/lib/plan-view";
+import { buildBrief, nextBriefTime } from "@/lib/dori/brief";
 import { upcomingAlerts } from "@/lib/tasks";
 
 export const maxDuration = 30;
@@ -64,6 +67,15 @@ export async function GET(req: Request) {
     ].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
     const now = Date.now();
     const timed = items.filter((i) => !i.allDay);
+    // The morning brief, when the user asked for one and its time falls in this window.
+    const briefAt = nextBriefTime(user.doriPrefs?.briefAt, user.timezone, Math.max(start.toMillis(), now - 10 * 60_000), end.toMillis());
+    let brief = null;
+    if (briefAt) {
+      const day = briefAt.toISODate()!;
+      const due = await db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.userId, user.id), eq(tasks.status, "open"), eq(tasks.kind, "reminder"), eq(tasks.dueDate, day)));
+      const risky = [...new Set(blocks.filter((b) => b.risk && DateTime.fromISO(b.start, { zone: user.timezone }).toISODate() === day).map((b) => b.title))];
+      brief = buildBrief(briefAt, items, due.length, risky);
+    }
     const current = timed.find((i) => Date.parse(i.start) <= now && Date.parse(i.end) > now) ?? null;
     const next = timed.find((i) => Date.parse(i.start) > now) ?? null;
     return json({
@@ -73,6 +85,7 @@ export async function GET(req: Request) {
       end: end.toISO(),
       items,
       alerts: alerts.map((a) => ({ id: `alert:${a.taskId}:${a.at}`, taskId: a.taskId, title: a.title, at: a.at })),
+      brief,
       now: current,
       next,
       problems: problems.map((p) => ({ email: p.email, message: p.message })),

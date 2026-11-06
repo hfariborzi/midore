@@ -98,11 +98,22 @@ pub struct Alert {
     pub at: String,
 }
 
+/// The morning brief, when the person asked for one: a notification with the shape of the day.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Brief {
+    pub id: String,
+    pub at: String,
+    pub title: String,
+    pub body: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Agenda {
     pub items: Vec<Item>,
     #[serde(default)]
     pub alerts: Vec<Alert>,
+    #[serde(default)]
+    pub brief: Option<Brief>,
     pub now: Option<Item>,
     pub next: Option<Item>,
 }

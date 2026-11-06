@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { CalendarClock, CalendarPlus, CalendarX, Check, CircleDashed, Loader2, Mail, Mic, Send, Square, Trash2, Undo2, Video, Volume2, VolumeX, X } from "lucide-react";
+import { CalendarClock, CalendarPlus, CalendarX, Check, CircleDashed, FileText, Image as ImageIcon, Loader2, Mail, Mic, Paperclip, Send, Square, Trash2, Undo2, Video, Volume2, VolumeX, X } from "lucide-react";
 import type { DoriCard, DoriMeta, DoriMood, DoriProposal } from "@/db/schema";
 import { Dori } from "@/components/Dori";
-import { acceptDoriProposal, clearDoriConversation, confirmDoriBookingCancel, confirmDoriEvent, confirmDoriEventChange, discardDoriProposal, dismissDoriEvent, setDoriEnabled, undoDoriMessage } from "./dori-actions";
+import { acceptDoriProposal, clearDoriConversation, confirmDoriBookingCancel, confirmDoriDeleteArea, confirmDoriRsvp, confirmDoriEvent, confirmDoriEventChange, discardDoriProposal, dismissDoriEvent, setDoriEnabled, undoDoriMessage } from "./dori-actions";
 
 type Msg = { id: number; role: "user" | "assistant"; content: string; meta: DoriMeta };
-type State = { available: boolean; enabled: boolean; name: string; voice: boolean; news: number; messages: Msg[] };
+type State = { available: boolean; enabled: boolean; name: string; voice: boolean; news: number; briefAt: string | null; messages: Msg[] };
+const BRIEF_KEY = "midore:dori-brief"; // the last day the morning brief opened Dori here
 
 /** Other parts of the dashboard open Dori with this event, optionally with text to send or to prefill. */
 export const OPEN_DORI = "doorcal:open-dori";
@@ -93,6 +94,19 @@ export function DoriPanel() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<{ stop: () => void } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [files, setFiles] = useState<Attached[]>([]);
+  const addFiles = useCallback(async (list: File[]) => {
+    setError(null);
+    for (const f of list) {
+      try {
+        const item = await readAttachment(f);
+        setFiles((cur) => (cur.length >= MAX_FILES ? cur : [...cur, item]));
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    }
+  }, []);
   const voiceRef = useRef(false); // natural voice (OpenRouter) available
   const restored = useRef(false); // the remembered open state has been read
 
@@ -121,16 +135,18 @@ export function DoriPanel() {
   }, [state?.messages.length, busy, open]);
 
   const send = useCallback(
-    async (text: string, mode: "chat" | "day" | "week" = "chat") => {
-      if (busy || (!text.trim() && mode === "chat")) return;
+    async (text: string, mode: "chat" | "day" | "week" = "chat", attachments: Attached[] = []) => {
+      if (busy || (!text.trim() && !attachments.length && mode === "chat")) return;
       setError(null);
       setInput("");
+      setFiles([]);
       if (inputRef.current) inputRef.current.style.height = "";
-      const optimistic: Msg = { id: -Date.now(), role: "user", content: mode === "day" ? "Day plan" : mode === "week" ? "Week plan" : text.trim(), meta: {} };
+      const note = attachments.length ? `(attached: ${attachments.map((a) => a.name).join(", ")})` : "";
+      const optimistic: Msg = { id: -Date.now(), role: "user", content: mode === "day" ? "Day plan" : mode === "week" ? "Week plan" : [text.trim(), note].filter(Boolean).join("\n"), meta: {} };
       setState((s) => (s ? { ...s, messages: [...s.messages, optimistic] } : s));
       setBusy({ mood: "thinking", text: "Thinking" });
       try {
-        const res = await fetch("/api/dori/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, mode }) });
+        const res = await fetch("/api/dori/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, mode, attachments }) });
         if (!res.ok || !res.body) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || "Dori couldn't answer just now.");
@@ -169,6 +185,27 @@ export function DoriPanel() {
     },
     [busy, router],
   );
+
+  // The morning brief: the first time Midore is open after the brief time, Dori opens with the day plan.
+  useEffect(() => {
+    if (!state?.enabled || !state.briefAt || busy) return;
+    const now = new Date();
+    const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    const [h, m] = state.briefAt.split(":").map(Number);
+    const since = now.getHours() * 60 + now.getMinutes() - (h * 60 + m);
+    if (since < 0 || since > 7 * 60) return; // only in the hours after the brief time
+    try {
+      if (localStorage.getItem(BRIEF_KEY) === today) return;
+      localStorage.setItem(BRIEF_KEY, today);
+    } catch {
+      return; // without storage it would repeat on every visit
+    }
+    const id = requestAnimationFrame(() => {
+      setOpen(true);
+      void send("", "day");
+    });
+    return () => cancelAnimationFrame(id);
+  }, [state?.enabled, state?.briefAt, busy, send]);
 
   // The panel stays docked across visits on wide screens if it was open last time.
   useEffect(() => {
@@ -359,13 +396,38 @@ export function DoriPanel() {
                   <Quick onClick={() => send("", "week")} disabled={!!busy}>Week plan</Quick>
                   <Quick onClick={() => { setInput("Here's everything on my plate: "); inputRef.current?.focus(); }} disabled={!!busy}>Brain dump</Quick>
                 </div>
+                {files.length > 0 && (
+                  <ul className="mb-2 flex flex-wrap gap-1.5">
+                    {files.map((f, i) => (
+                      <li key={i} className="flex max-w-full items-center gap-1.5 rounded-md border border-line bg-paper px-2 py-1 text-xs text-muted">
+                        {f.kind === "pdf" ? <FileText size={13} /> : <ImageIcon size={13} />}
+                        <span className="max-w-40 truncate">{f.name}</span>
+                        <button type="button" aria-label={`Remove ${f.name}`} className="text-faint hover:text-ink" onClick={() => setFiles((list) => list.filter((_, j) => j !== i))}><X size={12} /></button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <form
                   className="flex items-end gap-2"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    void send(input);
+                    void send(input, "chat", files);
                   }}
                 >
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*,application/pdf"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      void addFiles([...(e.target.files ?? [])]);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button type="button" className="btn-ghost h-10 w-8 shrink-0 p-0" onClick={() => fileRef.current?.click()} disabled={!!busy || files.length >= MAX_FILES} aria-label="Attach a photo or PDF" title="Attach a photo or PDF">
+                    <Paperclip size={17} />
+                  </button>
                   <textarea
                     ref={inputRef}
                     rows={1}
@@ -378,7 +440,14 @@ export function DoriPanel() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
-                        void send(input);
+                        void send(input, "chat", files);
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const pasted = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/") || f.type === "application/pdf");
+                      if (pasted.length) {
+                        e.preventDefault();
+                        void addFiles(pasted);
                       }
                     }}
                     placeholder="Tell Dori anything…"
@@ -399,7 +468,7 @@ export function DoriPanel() {
                       {recording === "transcribing" ? <Loader2 size={16} className="animate-spin" /> : recording === "recording" ? <Square size={14} /> : <Mic size={17} />}
                     </button>
                   )}
-                  <button type="submit" className="btn-primary h-10 w-10 shrink-0 p-0" disabled={!!busy || !input.trim()} aria-label="Send">
+                  <button type="submit" className="btn-primary h-10 w-10 shrink-0 p-0" disabled={!!busy || (!input.trim() && !files.length)} aria-label="Send">
                     <Send size={16} />
                   </button>
                 </form>
@@ -410,6 +479,36 @@ export function DoriPanel() {
       )}
     </>
   );
+}
+
+type Attached = { kind: "image" | "pdf"; name: string; dataUrl: string };
+const MAX_FILES = 3;
+const MAX_PDF_BYTES = 2_500_000;
+const MAX_IMAGE_SIDE = 1600;
+
+/** A photo is shrunk to at most 1600 px and sent as JPEG; a PDF is sent as is, up to 2.5 MB. */
+async function readAttachment(file: File): Promise<Attached> {
+  const name = file.name || (file.type === "application/pdf" ? "document.pdf" : "photo");
+  if (file.type === "application/pdf") {
+    if (file.size > MAX_PDF_BYTES) throw new Error("That PDF is too big. Try one under 2.5 MB, or a photo of the page.");
+    return { kind: "pdf", name, dataUrl: await new Promise<string>((ok, fail) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result));
+      r.onerror = () => fail(new Error("Couldn't read that file."));
+      r.readAsDataURL(file);
+    }) };
+  }
+  if (!file.type.startsWith("image/")) throw new Error("Dori can read photos and PDFs.");
+  const bitmap = await createImageBitmap(file).catch(() => {
+    throw new Error("Couldn't open that image.");
+  });
+  const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return { kind: "image", name, dataUrl: canvas.toDataURL("image/jpeg", 0.85) };
 }
 
 function Quick({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
@@ -564,6 +663,41 @@ function Card({ card, index, messageId, act, pending }: { card: DoriCard; index:
         )}
       </div>
     );
+  if (card.kind === "delete_area")
+    return (
+      <div className="rounded-xl border border-line bg-paper p-3 text-sm">
+        <div className="font-medium text-ink">Delete the area &ldquo;{card.name}&rdquo;?</div>
+        {card.status === "pending" ? (
+          <>
+            <p className="mt-1 text-xs text-faint">Its projects and tasks stay, with no area. Events labelled with it lose the label.</p>
+            <div className="mt-2 flex gap-2">
+              <button type="button" className="btn-danger py-1 text-xs" disabled={pending} onClick={() => act(() => confirmDoriDeleteArea(messageId, index))}><Trash2 size={14} /> Delete area</button>
+              <button type="button" className="btn-ghost py-1 text-xs" disabled={pending} onClick={() => act(() => dismissDoriEvent(messageId, index))}>Keep it</button>
+            </div>
+          </>
+        ) : (
+          <div className="mt-1 text-xs text-faint">{card.status === "done" ? "Deleted" : "Kept"}</div>
+        )}
+      </div>
+    );
+  if (card.kind === "rsvp") {
+    const word = { accepted: "Accept", declined: "Decline", tentative: "Maybe" }[card.response];
+    return (
+      <div className="rounded-xl border border-line bg-paper p-3 text-sm">
+        <div className="font-medium text-ink">{card.title}</div>
+        <div className="text-xs text-muted">{fmt(card.start)} – {time(card.end)}</div>
+        {card.comment && <p className="mt-1 text-xs text-faint">&ldquo;{card.comment}&rdquo;</p>}
+        {card.status === "pending" ? (
+          <div className="mt-2 flex gap-2">
+            <button type="button" className="btn-primary py-1 text-xs" disabled={pending} onClick={() => act(() => confirmDoriRsvp(messageId, index))}>{word}</button>
+            <button type="button" className="btn-ghost py-1 text-xs" disabled={pending} onClick={() => act(() => dismissDoriEvent(messageId, index))}>Not now</button>
+          </div>
+        ) : (
+          <div className="mt-1 text-xs text-faint">{card.status === "done" ? `Sent: ${word.toLowerCase()}` : "Not sent"}</div>
+        )}
+      </div>
+    );
+  }
   if (card.kind === "booking_cancel")
     return (
       <div className="rounded-xl border border-line bg-paper p-3 text-sm">

@@ -9,10 +9,11 @@ import { WeeklyHoursEditor } from "@/components/WeeklyHoursEditor";
 import { saveDoriPrefs, saveWorkHours, setDoriEnabled } from "../dori-actions";
 
 /** Dori on or off, what she calls you, and the hours when work can be planned. */
-export function DoriSettings({ available, enabled, nickname, character, workHours, availabilityHours }: { available: boolean; enabled: boolean; nickname: string; character: DoriCharacter; workHours: WeeklyHours | null; availabilityHours: WeeklyHours }) {
+export function DoriSettings({ available, enabled, nickname, character, briefAt, workHours, availabilityHours }: { available: boolean; enabled: boolean; nickname: string; character: DoriCharacter; briefAt: string | null; workHours: WeeklyHours | null; availabilityHours: WeeklyHours }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [name, setName] = useState(nickname);
+  const [brief, setBrief] = useState(briefAt ?? "");
   const [who, setWho] = useState<DoriCharacter>(character);
   const [own, setOwn] = useState(!!workHours);
   const [hours, setHours] = useState<WeeklyHours>(workHours ?? availabilityHours);
@@ -87,6 +88,23 @@ export function DoriSettings({ available, enabled, nickname, character, workHour
           <div>
             <label className="label" htmlFor="dori-nick">What Dori calls you</label>
             <input id="dori-nick" className="input w-56" maxLength={40} placeholder="Your first name" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <button className="btn-secondary" disabled={pending}>Save</button>
+        </form>
+      )}
+
+      {available && enabled && (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(() => saveDoriPrefs({ briefAt: brief || null }), brief ? "Morning brief saved." : "Morning brief turned off.");
+          }}
+        >
+          <div>
+            <label className="label" htmlFor="dori-brief">Morning brief</label>
+            <input id="dori-brief" type="time" className="input w-40" value={brief} onChange={(e) => setBrief(e.target.value)} />
+            <p className="help max-w-sm">A notification with the shape of your day on your phone and computer, and Dori&apos;s day plan the first time you open Midore after it. Leave empty for none.</p>
           </div>
           <button className="btn-secondary" disabled={pending}>Save</button>
         </form>

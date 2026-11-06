@@ -14,7 +14,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::api::{self, Alert, Item};
+use crate::api::{self, Agenda, Item};
 use crate::session::{self, AppState};
 
 const TRAY: &str = "main";
@@ -138,7 +138,7 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
     }
     let agenda = app.state::<AppState>().agenda.lock().unwrap().clone();
     if let Some(agenda) = agenda {
-        notify(app, &agenda.items, &agenda.alerts);
+        notify(app, &agenda);
         update_tray(app, Some(&agenda));
     }
 }
@@ -156,7 +156,7 @@ async fn refresh<R: Runtime>(app: &AppHandle<R>) {
     }
     match api::agenda(&token).await {
         Ok(agenda) => {
-            notify(app, &agenda.items, &agenda.alerts);
+            notify(app, &agenda);
             if let Ok(json) = serde_json::to_value(&agenda) {
                 session::keep_agenda(app, &json);
             }
@@ -410,12 +410,19 @@ fn place_under<R: Runtime>(app: &AppHandle<R>, window: &tauri::WebviewWindow<R>,
 }
 
 /// Planned work: a heads-up just before it starts, and "how did it go?" when it ends. Alerts set on tasks and
-/// reminders fire at their time.
-fn notify<R: Runtime>(app: &AppHandle<R>, items: &[Item], alerts: &[Alert]) {
+/// reminders, and the morning brief, fire at their time.
+fn notify<R: Runtime>(app: &AppHandle<R>, agenda: &Agenda) {
+    let (items, alerts) = (&agenda.items, &agenda.alerts);
     let now = Local::now();
     let notified = app.state::<Notified>();
     let mut seen = notified.0.lock().unwrap();
-    for alert in alerts {
+    if let Some(brief) = &agenda.brief {
+        let due = parse(&brief.at).map(|at| (now - at).num_seconds());
+        if due.is_some_and(|s| (0..=REFRESH_EVERY.as_secs() as i64 * 2).contains(&s)) && seen.insert(brief.id.clone()) {
+            let _ = app.notification().builder().title(brief.title.clone()).body(brief.body.clone()).show();
+        }
+    }
+    for alert in alerts.iter() {
         let Some(at) = parse(&alert.at) else { continue };
         let since = (now - at).num_seconds();
         if (0..=REFRESH_EVERY.as_secs() as i64 * 2).contains(&since) && seen.insert(alert.id.clone()) {

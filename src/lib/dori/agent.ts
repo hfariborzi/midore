@@ -4,7 +4,7 @@
  */
 import { and, desc, eq, lt } from "drizzle-orm";
 import { db, doriActions, doriMessages, plans, type DoriMeta, type DoriMood, type User } from "@/db";
-import { aiConfigured, chatWithTools, type ChatMessage } from "../ai/client";
+import { aiConfigured, chatWithTools, type ChatMessage, type ContentPart } from "../ai/client";
 import { logError } from "../log";
 import { freshPlan, listNotes, replan } from "../planner";
 import { buildContext, type EventRefs } from "./context";
@@ -18,7 +18,7 @@ const HISTORY = 10;
 // calls can be used as is when every call succeeds, which saves a whole model round.
 const READ_TOOLS = new Set([
   "get_plan", "find_meeting_times", "check_capacity", "list_meetings", "propose_plan", "draft_emails", "propose_calendar_event",
-  "propose_event_change", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking",
+  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report",
 ]);
 
 export type DoriEvent =
@@ -26,7 +26,8 @@ export type DoriEvent =
   | { type: "reply"; id: number; text: string; meta: DoriMeta }
   | { type: "error"; text: string };
 
-export type TurnInput = { text: string; mode?: "chat" | "day" | "week" };
+export type Attachment = { kind: "image" | "pdf"; name: string; dataUrl: string };
+export type TurnInput = { text: string; mode?: "chat" | "day" | "week"; attachments?: Attachment[] };
 
 const LANG_TAG = /\[\[lang:([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*)\]\]\s*$/;
 
@@ -42,10 +43,14 @@ export async function runTurn(user: User, input: TurnInput, emit: (e: DoriEvent)
   if (!user.doriConsentAt) return emit({ type: "error", text: "Turn Dori on first." });
   if (!(await doriRoomLeft(user.id))) return emit({ type: "error", text: "Dori has answered a lot today. She'll be back tomorrow." });
 
+  const attachments = input.mode === "day" || input.mode === "week" ? [] : (input.attachments ?? []);
   const userText = input.mode === "day" ? DAY_PLAN_PROMPT : input.mode === "week" ? WEEK_PLAN_PROMPT : input.text.trim().slice(0, 8000);
-  if (!userText) return emit({ type: "error", text: "Say something to Dori." });
+  if (!userText && !attachments.length) return emit({ type: "error", text: "Say something to Dori." });
+  // Only the names of attachments are kept in the conversation; the files themselves are sent once and dropped.
+  const attachedNote = attachments.length ? `(attached: ${attachments.map((a) => a.name || (a.kind === "pdf" ? "a PDF" : "a photo")).join(", ")})` : "";
+  const stored = [userText, attachedNote].filter(Boolean).join("\n");
 
-  const [userMsg] = await db.insert(doriMessages).values({ userId: user.id, role: "user", content: userText }).returning({ id: doriMessages.id });
+  const [userMsg] = await db.insert(doriMessages).values({ userId: user.id, role: "user", content: stored }).returning({ id: doriMessages.id });
   const history = (await db.select().from(doriMessages).where(and(eq(doriMessages.userId, user.id), lt(doriMessages.id, userMsg.id))).orderBy(desc(doriMessages.id)).limit(HISTORY)).reverse();
 
   emit({ type: "status", mood: "thinking", text: "Thinking" });
@@ -58,11 +63,19 @@ export async function runTurn(user: User, input: TurnInput, emit: (e: DoriEvent)
   lap(`context ${context.text.length} chars`);
 
   const messages: ChatMessage[] = [
-    { role: "system", content: doriSystem(user.doriPrefs?.character ?? "puppy") },
+    { role: "system", content: doriSystem(user.doriPrefs?.character ?? "puppy", { language: user.doriPrefs?.language, style: user.doriPrefs?.style }) },
     { role: "user", content: `My data (JSON):\n${context.text}` },
     { role: "assistant", content: "Got it." },
     ...history.map<ChatMessage>((m) => (m.role === "user" ? { role: "user", content: m.content.slice(0, 1500) } : { role: "assistant", content: m.content.slice(0, 700) })),
-    { role: "user", content: userText },
+    {
+      role: "user",
+      content: attachments.length
+        ? [
+            { type: "text", text: userText || "Here's what I attached." },
+            ...attachments.map<ContentPart>((a) => (a.kind === "image" ? { type: "image_url", image_url: { url: a.dataUrl } } : { type: "file", file: { filename: a.name || "document.pdf", file_data: a.dataUrl } })),
+          ]
+        : userText,
+    },
   ];
 
   const ctx: ToolContext = { user, refs, undo: [], actions: [], cards: [], changed: false, celebrated: false, concerned: false };

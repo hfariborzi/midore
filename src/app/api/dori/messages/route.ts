@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
       name: greetingName(user),
       voice: speechAvailable(),
       news,
+      briefAt: user.doriPrefs?.briefAt ?? null,
       messages: rows.reverse().map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta, at: m.createdAt })),
     },
     { headers: { "Cache-Control": "no-store" } },

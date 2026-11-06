@@ -282,6 +282,17 @@ export const googleCalendar: CalendarProvider = {
     );
   },
 
+  async respond(account, calendarId, eventId, response, comment) {
+    const cal = calendarFor(account);
+    const ev = await guard(account, () => cal.events.get({ calendarId, eventId }));
+    const attendees = ev.data.attendees ?? [];
+    const me = attendees.find((a) => a.self);
+    if (!me) throw new Error("This account isn't a guest of that event");
+    me.responseStatus = response;
+    if (comment) me.comment = comment;
+    await guard(account, () => cal.events.patch({ calendarId, eventId, sendUpdates: "all", requestBody: { attendees } }));
+  },
+
   async deleteEvent(account, calendarId, eventId) {
     const cal = calendarFor(account);
     try {

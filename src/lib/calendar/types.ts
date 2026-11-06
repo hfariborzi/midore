@@ -58,6 +58,8 @@ export type { Recurrence } from "./recurrence";
 
 export type CreatedEvent = { id: string; meetLink: string | null; htmlLink: string | null };
 
+export type RsvpResponse = "accepted" | "declined" | "tentative";
+
 export type EventSnapshot = { attendees: Attendee[]; cancelled: boolean };
 
 /** What every calendar provider must implement. All methods take the connected account they act on. */
@@ -73,6 +75,8 @@ export interface CalendarProvider {
   setAttendees(account: CalendarAccount, calendarId: string, eventId: string, attendees: Attendee[]): Promise<void>;
   moveEvent(account: CalendarAccount, calendarId: string, eventId: string, start: Date, end: Date, timeZone: string): Promise<void>;
   deleteEvent(account: CalendarAccount, calendarId: string, eventId: string): Promise<void>;
+  /** Answer an invitation the account was sent; the organizer is told. Throws when the account isn't a guest. */
+  respond(account: CalendarAccount, calendarId: string, eventId: string, response: RsvpResponse, comment?: string): Promise<void>;
   /** Best effort: tell the provider to forget our access. */
   revoke(refreshToken: string): Promise<void>;
   /** Ask the provider to call `address` when events on this calendar change. */

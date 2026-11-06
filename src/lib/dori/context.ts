@@ -36,8 +36,17 @@ function hoursText(weekly: WeeklyHours) {
 }
 
 /** Calendar events in a window, registered under short refs ("e1", "e2") the model can point at. */
+const MY_ANSWER: Record<string, string> = { needsAction: "not answered", notResponded: "not answered", accepted: "accepted", declined: "declined", tentative: "maybe", tentativelyAccepted: "maybe", organizer: "organizer" };
+
 export async function eventsWithRefs(user: User, from: Date, to: Date, refs: EventRefs) {
-  const { events, problems } = await eventsForAccounts(user, await listAccounts(user.id), from, to);
+  const accounts = await listAccounts(user.id);
+  const { events, problems } = await eventsForAccounts(user, accounts, from, to);
+  const mine = new Set(accounts.map((a) => a.email.toLowerCase()));
+  // The user's own answer to an invitation (never anyone else's): for "which invitations haven't I answered?".
+  const answer = (e: CalendarEvent) => {
+    const me = e.attendees.find((a) => mine.has(a.email.toLowerCase()));
+    return me?.status ? MY_ANSWER[me.status] : undefined;
+  };
   const tz = user.timezone;
   const rows = events
     .sort((a, b) => a.start.localeCompare(b.start))
@@ -48,7 +57,7 @@ export async function eventsWithRefs(user: User, from: Date, to: Date, refs: Eve
       refs.set(ref, e);
       return e.allDay
         ? { ref, day: dayOf(e.start, tz), allDay: true, title: e.title.slice(0, 120), calendar: e.calendarName?.slice(0, 40) }
-        : { ref, day: dayOf(e.start, tz), start: hhmm(e.start, tz), end: hhmm(e.end, tz), title: e.title.slice(0, 120), calendar: e.calendarName?.slice(0, 40), attendees: e.attendees.length };
+        : { ref, day: dayOf(e.start, tz), start: hhmm(e.start, tz), end: hhmm(e.end, tz), title: e.title.slice(0, 120), calendar: e.calendarName?.slice(0, 40), attendees: e.attendees.length, ...(answer(e) ? { you: answer(e) } : {}) };
     });
   return { rows, problems };
 }
@@ -101,6 +110,8 @@ export async function buildContext(user: User, plan: Plan, refs: EventRefs, note
     ...(t.repeat ? { repeat: t.repeat } : {}),
     ...(t.remindAt ? { alert: DateTime.fromJSDate(t.remindAt, { zone: tz }).toFormat("yyyy-MM-dd HH:mm") } : {}),
     ...(t.progress ? { progress: t.progress } : {}),
+    ...(t.waitingOn ? { waiting_on: t.waitingOn } : {}),
+    ...(t.checklist.length ? { checklist: t.checklist.slice(0, 12).map((i) => `${i.done ? "[x]" : "[ ]"} ${i.text.slice(0, 60)}`) } : {}),
     ...(t.deferCount > 1 ? { pushed: t.deferCount } : {}),
     ...(t.notes ? { notes: t.notes.slice(0, 160) } : {}),
     ...(blocked.has(t.id) ? { waiting: true } : {}),
@@ -116,6 +127,7 @@ export async function buildContext(user: User, plan: Plan, refs: EventRefs, note
       return {
         id: p.id, name: p.name, ...(p.categoryId ? { area: p.categoryId } : {}), ...(p.targetDate ? { target: p.targetDate } : {}), ...(p.status !== "active" ? { status: p.status } : {}), ...(p.pausedUntil ? { paused_until: p.pausedUntil } : {}),
         tasks_open: mine.filter((t) => !isComplete(t.status)).length, tasks_done: mine.filter((t) => isComplete(t.status)).length,
+        ...(mine.length ? { last_activity: DateTime.fromMillis(Math.max(...mine.map((t) => (t.completedAt ?? t.updatedAt).getTime())), { zone: tz }).toISODate() } : {}),
         ...(p.notes ? { notes: p.notes.slice(0, 160) } : {}),
       };
     }),

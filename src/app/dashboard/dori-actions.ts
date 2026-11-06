@@ -11,6 +11,7 @@ import { cancelBooking } from "@/lib/bookings";
 import { isConnected, listAccounts, providerFor, resolveWriteTarget } from "@/lib/calendar";
 import { randomId } from "@/lib/crypto";
 import { applyProposal } from "@/lib/dori/proposal";
+import { deleteAreaConfirmed } from "@/lib/dori/tools";
 import { undoMessage } from "@/lib/dori/undo";
 import { logError } from "@/lib/log";
 import { markPlanDirty, replan, todayIn } from "@/lib/planner";
@@ -46,16 +47,21 @@ export async function setDoriEnabled(enabled: boolean): Promise<Result> {
   return {};
 }
 
-const prefsSchema = z.object({ nickname: z.string().trim().max(40).optional(), character: z.enum(["puppy", "kitten"]).optional() });
+const prefsSchema = z.object({
+  nickname: z.string().trim().max(40).optional(),
+  character: z.enum(["puppy", "kitten"]).optional(),
+  briefAt: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+});
 
 export async function saveDoriPrefs(input: z.input<typeof prefsSchema>): Promise<Result> {
   const user = await requireUser();
   const parsed = prefsSchema.safeParse(input);
   if (!parsed.success) return { error: "Keep the nickname under 40 characters" };
   const current = user.doriPrefs ?? { nickname: "" };
+  const { nickname, character, briefAt } = parsed.data;
   await db
     .update(users)
-    .set({ doriPrefs: { ...current, ...(parsed.data.nickname !== undefined ? { nickname: parsed.data.nickname } : {}), ...(parsed.data.character ? { character: parsed.data.character } : {}) } })
+    .set({ doriPrefs: { ...current, ...(nickname !== undefined ? { nickname } : {}), ...(character ? { character } : {}), ...(briefAt !== undefined ? { briefAt } : {}) } })
     .where(eq(users.id, user.id));
   revalidatePath("/dashboard", "layout");
   return {};
@@ -160,7 +166,7 @@ export async function dismissDoriEvent(messageId: number, cardIndex: number): Pr
   const user = await requireUser();
   const m = await ownMessage(user.id, messageId);
   const card = m?.meta.cards?.[cardIndex];
-  if (!m || !card || (card.kind !== "event" && card.kind !== "event_change" && card.kind !== "booking_cancel")) return {};
+  if (!m || !card || (card.kind !== "event" && card.kind !== "event_change" && card.kind !== "booking_cancel" && card.kind !== "rsvp" && card.kind !== "delete_area")) return {};
   const cards = [...(m.meta.cards ?? [])];
   cards[cardIndex] = { ...card, status: "dismissed" } as typeof card;
   await setMeta(m.id, { ...m.meta, cards });
@@ -182,6 +188,42 @@ export async function confirmDoriEventChange(messageId: number, cardIndex: numbe
   } catch (err) {
     logError("dori event change", err);
     return { error: card.action === "delete" ? "Couldn't delete it. Try again from your calendar app." : "Couldn't move it. Try again from your calendar app." };
+  }
+  const cards = [...(m.meta.cards ?? [])];
+  cards[cardIndex] = { ...card, status: "done" };
+  await setMeta(m.id, { ...m.meta, cards });
+  await planChanged(user);
+  return {};
+}
+
+/** Delete the area Dori offered to delete; Undo on the message brings it back (event labels stay cleared). */
+export async function confirmDoriDeleteArea(messageId: number, cardIndex: number): Promise<Result> {
+  const user = await requireUser();
+  const m = await ownMessage(user.id, messageId);
+  const card = m?.meta.cards?.[cardIndex];
+  if (!m || !card || card.kind !== "delete_area" || card.status !== "pending") return { error: "Nothing to delete" };
+  const undo = await deleteAreaConfirmed(user.id, card.id);
+  const cards = [...(m.meta.cards ?? [])];
+  cards[cardIndex] = { ...card, status: "done" };
+  if (undo) await db.insert(doriActions).values({ userId: user.id, messageId: m.id, undo: [undo] });
+  await setMeta(m.id, { ...m.meta, cards, ...(undo ? { actions: [...(m.meta.actions ?? []), `Deleted area "${card.name}"`], undoable: true, undone: false } : {}) });
+  await planChanged(user);
+  return {};
+}
+
+/** Send the reply to an invitation that Dori prepared. */
+export async function confirmDoriRsvp(messageId: number, cardIndex: number): Promise<Result> {
+  const user = await requireUser();
+  const m = await ownMessage(user.id, messageId);
+  const card = m?.meta.cards?.[cardIndex];
+  if (!m || !card || card.kind !== "rsvp" || card.status !== "pending") return { error: "Nothing to send" };
+  const account = (await listAccounts(user.id)).find((a) => a.id === card.accountId);
+  if (!account || !isConnected(account)) return { error: "That calendar needs to be reconnected in Settings." };
+  try {
+    await providerFor(account).respond(account, card.calendarId, card.eventId, card.response, card.comment || undefined);
+  } catch (err) {
+    logError("dori rsvp", err);
+    return { error: "Couldn't send the reply. You may be the organizer, or it may need answering from your calendar app." };
   }
   const cards = [...(m.meta.cards ?? [])];
   cards[cardIndex] = { ...card, status: "done" };

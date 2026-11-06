@@ -369,6 +369,14 @@ export const microsoftCalendar: CalendarProvider = {
     });
   },
 
+  async respond(account, _calendarId, eventId, response, comment) {
+    const action = { accepted: "accept", declined: "decline", tentative: "tentativelyAccept" }[response];
+    await graph(account, `/me/events/${encodeURIComponent(eventId)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ comment: comment ?? "", sendResponse: true }),
+    });
+  },
+
   async deleteEvent(account, _calendarId, eventId) {
     try {
       await graph(account, `/me/events/${encodeURIComponent(eventId)}`, { method: "DELETE" });

@@ -136,11 +136,12 @@ export default function PrivacyPage() {
         <>
           <p>
             Dori is off until you turn her on. When you message her, {APP_NAME} sends {AI_PROVIDER_NAME} what she
-            needs to answer: your message and your recent conversation with her; your areas, projects and tasks
+            needs to answer: your message, any photo or PDF you attach to it, the upcoming items of a calendar link you
+            give her to read (such as a course calendar), and your recent conversation with her; your areas, projects and tasks
             (titles, notes, dates, estimates, priorities and the names of people you typed); notes she keeps for
             you, such as &ldquo;not in the mood for writing today&rdquo;; your working hours and planned work; and,
             from your calendars for the coming week (or a range you ask about), each event&apos;s title, start and
-            end time, calendar name and number of attendees; your booking pages (title, lengths, link) and booking
+            end time, calendar name, number of attendees and your own answer to the invitation; your booking pages (title, lengths, link) and booking
             hours; and, when you ask about bookings, each booking&apos;s page, time and number of guests. Attendee and
             booker names and email addresses, answers to booking questions, event descriptions and locations are
             never sent.{DORI_MODEL ? ` The model currently used is ${DORI_MODEL}.` : ""}{" "}
@@ -155,7 +156,8 @@ export default function PrivacyPage() {
             its button. She can also prepare emails, which
             open in your own mail app with the recipients filled in by {APP_NAME} in your browser; {APP_NAME} never
             sends them. Your conversation with Dori is stored in {APP_NAME} until you clear it or turn Dori off,
-            which also deletes the notes she kept.
+            which also deletes the notes she kept. Photos and PDFs you attach are sent with that one message and are not
+            stored; only their file names stay in the conversation.
           </p>
           <p>
             {VOICE

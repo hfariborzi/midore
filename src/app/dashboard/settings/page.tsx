@@ -55,7 +55,7 @@ export default async function SettingsPage(props: PageProps<"/dashboard/settings
         flash={typeof sp.error === "string" ? { kind: "error", text: sp.error } : sp.connected === "1" ? { kind: "ok", text: "Calendar connected." } : null}
       />
       <SignInSettings apple={appleEnabled()} linkedEmail={apple ? apple.email : null} privateEmail={!!apple?.privateEmail} flash={sp.linked === "apple" ? "Apple linked. You can now sign in with Apple." : null} />
-      <DoriSettings available={aiConfigured()} enabled={!!user.doriConsentAt} nickname={user.doriPrefs?.nickname ?? ""} character={user.doriPrefs?.character ?? "puppy"} workHours={user.workHours} availabilityHours={defaults.schedule.weekly} />
+      <DoriSettings available={aiConfigured()} enabled={!!user.doriConsentAt} nickname={user.doriPrefs?.nickname ?? ""} character={user.doriPrefs?.character ?? "puppy"} briefAt={user.doriPrefs?.briefAt ?? null} workHours={user.workHours} availabilityHours={defaults.schedule.weekly} />
       <CategoriesSettings categories={cats} rules={rules} />
       <AiSettings configured={aiConfigured()} providerName={AI_PROVIDER_NAME} enabled={!!user.aiConsentAt} usage={usage} hasCategories={cats.length > 0} />
       <DevicesSettings devices={devices.map((d) => ({ ...d, createdAt: d.createdAt.toISOString(), lastUsedAt: d.lastUsedAt?.toISOString() ?? null }))} />

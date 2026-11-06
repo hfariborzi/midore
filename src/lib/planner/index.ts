@@ -122,9 +122,9 @@ export async function loadInputs(user: User, horizonDays = HORIZON_DAYS): Promis
     weekly: hours.weekly,
     overrides: hours.overrides,
     busy: busyResult.busy,
-    // Work in a paused project waits until the project is active again.
+    // Work in a paused project waits until the project is active again; work waiting on someone waits for them.
     tasks: tasks
-      .filter((t) => !t.projectId || !paused.has(t.projectId))
+      .filter((t) => (!t.projectId || !paused.has(t.projectId)) && !t.waitingOn)
       .map((t) => ({ id: t.id, title: t.title, estimateMinutes: remainingMinutes(t.estimateMinutes, t.progress), dueDate: t.dueDate ?? (t.projectId ? (projectTarget.get(t.projectId) ?? null) : null), hardDeadline: t.hardDeadline, priority: t.priority, energy: t.energy, status: t.status, kind: t.kind, position: t.position, projectId: t.projectId, categoryId: t.categoryId })),
     links,
     pinned: pinned.map((p) => ({ taskId: p.taskId, start: p.start.getTime(), end: p.end.getTime() })),

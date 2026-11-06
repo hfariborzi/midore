@@ -5,7 +5,7 @@ import type { Task } from "../../db/schema.ts";
 
 const base: Task = {
   id: 0, userId: 1, projectId: null, categoryId: null, title: "", notes: "", kind: "task", status: "open", residue: "",
-  estimateMinutes: null, progress: 0, dueDate: null, hardDeadline: false, priority: "normal", energy: null, people: [], repeat: null, seriesId: null, remindAt: null, deferCount: 0, position: 0,
+  estimateMinutes: null, progress: 0, dueDate: null, hardDeadline: false, priority: "normal", energy: null, people: [], repeat: null, seriesId: null, remindAt: null, deferCount: 0, waitingOn: null, checklist: [], position: 0,
   createdAt: new Date(0), updatedAt: new Date(0), completedAt: null,
 };
 const t = (over: Partial<Task>): Task => ({ ...base, ...over });

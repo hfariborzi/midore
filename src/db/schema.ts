@@ -54,6 +54,10 @@ export type DoriCharacter = "puppy" | "kitten";
 export type DoriPrefs = {
   nickname: string; // how Dori greets you; empty = first name
   character?: DoriCharacter; // how Dori looks; default puppy
+  briefAt?: string | null; // HH:mm: the morning brief (a notification and Dori's day plan); null = off
+  language?: string | null; // Dori always answers in this language; null = the language of the last message
+  style?: string | null; // how Dori talks, in the user's words ("shorter", "like a coach")
+  dueHeadsUpDays?: number | null; // an alert this many days before every due date, at 9 am
 };
 
 /** Soft preferences shown to invitees; they never remove a slot. */
@@ -215,6 +219,7 @@ export type TaskEnergy = "deep" | "light";
 export type TaskLinkKind = "before" | "together"; // "from" finishes before "to" starts; or the two are done as one
 // "daily", "weekly", "days:1,3,5", "nth:-1:5", "times:3" …; the grammar is in src/lib/tasks/repeat.ts.
 export type TaskRepeat = string;
+export type ChecklistItem = { text: string; done: boolean };
 
 /** A bounded effort inside an area, e.g. "JIBS revision" under Research. */
 export const projects = pgTable(
@@ -267,6 +272,8 @@ export const tasks = pgTable(
     seriesId: integer("series_id"), // the first occurrence of a repeating task; every later one points to it
     remindAt: timestamp("remind_at", { withTimezone: true }), // when to alert ("remind me at 6"); null = no alert
     deferCount: integer("defer_count").notNull().default(0), // times the due date was pushed later
+    waitingOn: text("waiting_on"), // a person or thing this is waiting for; not planned until cleared
+    checklist: jsonb("checklist").$type<ChecklistItem[]>().notNull().default([]), // small steps inside the task
     position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -395,7 +402,12 @@ export type DoriCard =
       kind: "event_change"; action: "move" | "delete"; title: string; accountId: number; calendarId: string; eventId: string;
       start: string; end: string; newStart?: string; newEnd?: string; status: "pending" | "done" | "dismissed";
     }
+  | { kind: "delete_area"; id: number; name: string; status: "pending" | "done" | "dismissed" }
   | { kind: "booking_cancel"; uid: string; title: string; who: string; start: string; end: string; reason: string; status: "pending" | "done" | "dismissed" }
+  | {
+      kind: "rsvp"; response: "accepted" | "declined" | "tentative"; comment: string; title: string; accountId: number; calendarId: string; eventId: string;
+      start: string; end: string; status: "pending" | "done" | "dismissed";
+    }
   | { kind: "slots"; items: { start: string; end: string; shifts: string[] }[] };
 export type DoriMeta = {
   lang?: string;
@@ -442,7 +454,8 @@ export type UndoOp =
   | { op: "patchUser"; fields: { doriPrefs?: DoriPrefs | null; timezone?: string } }
   | { op: "patchEventType"; id: number; fields: Record<string, unknown> }
   | { op: "patchSchedule"; id: number; fields: Record<string, unknown> }
-  | { op: "deleteEventType"; id: number };
+  | { op: "deleteEventType"; id: number }
+  | { op: "deleteSchedule"; id: number };
 
 export const doriActions = pgTable(
   "dori_actions",

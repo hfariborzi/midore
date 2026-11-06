@@ -1,6 +1,6 @@
 //! Phones only: what the app does on its own, without the web page.
-//! - Reminders scheduled on the phone, so they arrive with the app closed: alerts set on tasks and reminders,
-//!   a heads-up just before planned work starts, and "How did it go?" when it ends.
+//! - Reminders scheduled on the phone, so they arrive with the app closed: the morning brief, alerts set on tasks
+//!   and reminders, a heads-up just before planned work starts, and "How did it go?" when it ends.
 //! - The Live Activity on iPhone: what's on now, on the Lock Screen and in the Dynamic Island.
 //! - An offline copy of the next two days for the start page.
 //! It syncs when the app opens or comes back to the front, after signing in, and every few minutes while open.
@@ -11,7 +11,7 @@ use chrono::{DateTime, Local};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_notification::{NotificationExt, PermissionState, Schedule};
 
-use crate::api::{self, Agenda, Alert, Item};
+use crate::api::{self, Agenda};
 use crate::session;
 
 const HEADS_UP_SECS: i64 = 120;
@@ -43,7 +43,7 @@ async fn sync<R: Runtime>(app: &AppHandle<R>) {
         Ok(json) => {
             session::keep_agenda(app, &json);
             if let Ok(agenda) = serde_json::from_value::<Agenda>(json) {
-                schedule(app, &agenda.items, &agenda.alerts);
+                schedule(app, &agenda);
                 live_activity(app, &agenda);
             }
         }
@@ -89,7 +89,8 @@ fn note_id(item: &str, purpose: u8) -> i32 {
     (h & 0x7fff_ffff) as i32
 }
 
-fn schedule<R: Runtime>(app: &AppHandle<R>, items: &[Item], alerts: &[Alert]) {
+fn schedule<R: Runtime>(app: &AppHandle<R>, agenda: &Agenda) {
+    let (items, alerts) = (&agenda.items, &agenda.alerts);
     let n = app.notification();
     match n.permission_state() {
         Ok(PermissionState::Granted) => {}
@@ -113,8 +114,13 @@ fn schedule<R: Runtime>(app: &AppHandle<R>, items: &[Item], alerts: &[Alert]) {
             planned.push((note_id(&item.id, 2), end, format!("How did it go? {}", item.title), "Open Midore to mark it done, partly done or not done.".to_string()));
         }
     }
-    // Alerts the person asked for come first when the phone's limit is near.
+    // Alerts the person asked for (and the morning brief) come first when the phone's limit is near.
     let mut asked = Vec::new();
+    if let Some(brief) = &agenda.brief {
+        if let Some(at) = parse(&brief.at).filter(|at| *at > now) {
+            asked.push((note_id(&brief.id, 4), at, brief.title.clone(), brief.body.clone()));
+        }
+    }
     for alert in alerts {
         if let Some(at) = parse(&alert.at).filter(|at| *at > now) {
             asked.push((note_id(&alert.id, 3), at, alert.title.clone(), "Reminder from Midore".to_string()));

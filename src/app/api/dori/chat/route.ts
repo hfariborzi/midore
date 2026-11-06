@@ -8,7 +8,16 @@ import { rateLimitKey, RateLimitError } from "@/lib/rate-limit";
 // A turn can take several model calls and tool runs.
 export const maxDuration = 60;
 
-const bodySchema = z.object({ text: z.string().max(8000).default(""), mode: z.enum(["chat", "day", "week"]).default("chat") });
+// Attachments go to the model with this one message and are never stored. Images are shrunk in the browser;
+// the request as a whole must stay under the platform's 4.5 MB body limit.
+const attachmentSchema = z.object({
+  kind: z.enum(["image", "pdf"]),
+  name: z.string().trim().max(120).default(""),
+  dataUrl: z.string().max(4_000_000).regex(/^data:(image\/(png|jpeg|webp|gif)|application\/pdf);base64,[A-Za-z0-9+/=]+$/),
+});
+const bodySchema = z
+  .object({ text: z.string().max(8000).default(""), mode: z.enum(["chat", "day", "week"]).default("chat"), attachments: z.array(attachmentSchema).max(3).default([]) })
+  .refine((b) => b.attachments.reduce((n, a) => n + a.dataUrl.length, 0) <= 4_200_000, "Attachments are too large");
 
 /** One message to Dori. Streams newline-delimited JSON events: status updates, then the reply. */
 export async function POST(req: NextRequest) {

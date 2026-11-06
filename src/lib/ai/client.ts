@@ -130,8 +130,14 @@ export async function completeJson<T>(opts: {
 // --- Chat with tools (Dori) -------------------------------------------------------------------------------
 
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+/** Parts of a user message with attachments (OpenAI-style; OpenRouter passes files through). */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "file"; file: { filename: string; file_data: string } };
 export type ChatMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | ContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 export type ToolDef = { type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } };
