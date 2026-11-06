@@ -19,6 +19,8 @@ export const OPEN_DORI = "doorcal:open-dori";
 /** Fired after Dori changed tasks or the plan, so the calendar and task views reload. */
 export const DORI_CHANGED = "doorcal:dori-changed";
 export type OpenDoriDetail = { send?: string; prefill?: string; mode?: "day" | "week" };
+/** Fired after the user changed a task, so Dori checks for anything a rule had her say ("tell me what's next"). */
+export const TASKS_CHANGED = "midore:tasks-changed";
 /** The top bar's Dori button sends this to open or close the panel. */
 export const TOGGLE_DORI = "midore:toggle-dori";
 /** The panel reports whether it is open and whether Dori has news, so the top bar can show it. */
@@ -132,6 +134,48 @@ export function DoriPanel() {
     };
   }, []);
 
+  // Messages a rule posted (after a task is finished, or from a phone): fetched when a task changes here and
+  // when the tab comes back. On wide screens Dori opens with them; otherwise her badge shows.
+  const [ruleNews, setRuleNews] = useState(false);
+  const stateRef = useRef(state);
+  const busyRef = useRef(false);
+  const openRef = useRef(open);
+  useEffect(() => {
+    stateRef.current = state;
+    busyRef.current = !!busy;
+    openRef.current = open;
+  }, [state, busy, open]);
+  useEffect(() => {
+    let running = false;
+    const check = async () => {
+      const cur = stateRef.current;
+      if (running || busyRef.current || !cur?.enabled) return;
+      const last = Math.max(0, ...cur.messages.map((m) => m.id));
+      running = true;
+      try {
+        const res = await fetch(`/api/dori/messages?after=${last}`);
+        if (!res.ok) return;
+        const d: { messages: Msg[] } = await res.json();
+        if (!d.messages.length || busyRef.current) return;
+        setState((s) => (s ? { ...s, messages: [...s.messages, ...d.messages.filter((m) => !s.messages.some((x) => x.id === m.id))] } : s));
+        if (d.messages.some((m) => m.meta.fromRule) && !openRef.current) {
+          if (window.innerWidth >= 768) setOpen(true);
+          else setRuleNews(true);
+        }
+      } catch {
+      } finally {
+        running = false;
+      }
+    };
+    const soon = () => window.setTimeout(check, 400);
+    const onVisible = () => document.visibilityState === "visible" && check();
+    window.addEventListener(TASKS_CHANGED, soon);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener(TASKS_CHANGED, soon);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [state?.messages.length, busy, open]);
@@ -244,7 +288,10 @@ export function DoriPanel() {
       } catch {}
       restored.current = true;
     });
-    const onToggle = () => setOpen((o) => !o);
+    const onToggle = () => {
+      setRuleNews(false);
+      setOpen((o) => !o);
+    };
     window.addEventListener(TOGGLE_DORI, onToggle);
     return () => {
       cancelAnimationFrame(reopen);
@@ -255,8 +302,8 @@ export function DoriPanel() {
     try {
       if (restored.current) localStorage.setItem(OPEN_KEY, open ? "1" : "0");
     } catch {}
-    window.dispatchEvent(new CustomEvent<DoriStatusDetail>(DORI_STATUS, { detail: { open, news: !!state?.news } }));
-  }, [open, state?.news]);
+    window.dispatchEvent(new CustomEvent<DoriStatusDetail>(DORI_STATUS, { detail: { open, news: !!state?.news || ruleNews } }));
+  }, [open, state?.news, ruleNews]);
 
   // Open from anywhere: buttons elsewhere dispatch OPEN_DORI.
   useEffect(() => {
@@ -331,7 +378,10 @@ export function DoriPanel() {
           screens; on phones the open panel covers the screen, so she steps aside. */}
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setRuleNews(false);
+          setOpen(!open);
+        }}
         className={`fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 grid h-[72px] w-[72px] place-items-center rounded-full border border-line bg-surface shadow-(--shadow-modal) transition hover:-translate-y-0.5 ${
           open ? "right-4 hidden md:right-[416px] md:grid" : "right-4 sm:right-6 sm:bottom-6"
         }`}
@@ -340,7 +390,7 @@ export function DoriPanel() {
         title="Dori"
       >
         <Dori mood="happy" size={60} live />
-        {!!state?.news && !open && <span className="absolute top-1 right-1 h-3 w-3 rounded-full border-2 border-surface bg-amber" aria-label="News from Dori" />}
+        {(!!state?.news || ruleNews) && !open && <span className="absolute top-1 right-1 h-3 w-3 rounded-full border-2 border-surface bg-amber" aria-label="News from Dori" />}
       </button>
 
       {open && (

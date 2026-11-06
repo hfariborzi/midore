@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describe, matchesDone, renderTitle, ruleMark } from "./automations-core.ts";
+import { describe, matchesDone, nextStepsMessage, renderTitle, ruleMark } from "./automations-core.ts";
 
 const task = (title: string, projectId: number | null = 3, categoryId: number | null = 1, notes = "") => ({ id: 9, title, projectId, categoryId, notes });
 
@@ -26,4 +26,17 @@ test("titles and descriptions", () => {
   assert.equal(renderTitle("  ", "Chapter 3"), "Chapter 3");
   assert.equal(describe({ on: "task_done", titleHas: "chapter" }, { do: "create_task", title: "Review {task}", dueInDays: 7 }, { project: "Thesis" }), 'When a task with "chapter" in Thesis is finished, add "Review {task}", due 7 days later.');
   assert.equal(describe({ on: "not_done_by", taskId: 9, day: "2026-11-11" }, { do: "drop" }, { task: "Review" }), 'If "Review" isn\'t done by 2026-11-11, drop it.');
+});
+
+test("tell me what's next: the next open tasks, or that it was the last one", () => {
+  assert.equal(
+    nextStepsMessage("Budget draft", "Grant", [
+      { title: "Letters of support", at: "Tue 10 Nov at 9:00" },
+      { title: "Final read", at: null },
+      { title: "Sign-off", at: null, waitingOn: "Dean" },
+    ]),
+    "“Budget draft” is done. Next in Grant:\n- Letters of support (planned Tue 10 Nov at 9:00)\n- Final read (not planned yet)\n- Sign-off (waiting on Dean)",
+  );
+  assert.equal(nextStepsMessage("Submit", "Grant", []), "“Submit” is done. That was the last open task in Grant.");
+  assert.equal(describe({ on: "task_done", projectId: 3 }, { do: "tell_next" }, { project: "Grant" }), "When a task in Grant is finished, tell me what's next.");
 });

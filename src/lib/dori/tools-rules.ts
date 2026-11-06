@@ -33,7 +33,7 @@ const ref = (what: string) => ({ anyOf: [{ type: "integer" }, { type: "string" }
 
 export const RULE_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "rank_projects", description: "Order projects by importance (\"the thesis comes first, then teaching\"). The planner fits work from higher-ranked projects first when deadlines and priority are equal. Projects not listed lose their rank.", parameters: S.obj({ ids: S.arr(S.int(), "Project ids, most important first") }, ["ids"]) } },
-  { type: "function", function: { name: "add_automation", description: "Set up a rule that runs by itself. when task_done: each time a matching task is finished (give title_has, project or area), add a new task. when not_done_by: if one task is still open after by_day, drop it, raise its priority, push its due date or remind the user.", parameters: S.obj({
+  { type: "function", function: { name: "add_automation", description: "Set up a rule that runs by itself. when task_done: each time a matching task is finished (give title_has, project or area), add a new task, or tell_next (you post the next open tasks in its project: \"tell me what's next\"). when not_done_by: if one task is still open after by_day, drop it, raise its priority, push its due date or remind the user.", parameters: S.obj({
     label: S.str("The rule in the user's words, short"),
     when: S.enum(["task_done", "not_done_by"]),
     title_has: S.str("task_done: words in the finished task's title; several as \"chapter|draft\""),
@@ -41,7 +41,7 @@ export const RULE_TOOL_DEFS: ToolDef[] = [
     area: ref("task_done: only tasks in this area"),
     task_id: S.int("not_done_by: the task"),
     by_day: S.str("not_done_by: YYYY-MM-DD, the last day it may still be done"),
-    then: S.enum(["create_task", "drop", "set_priority", "move_due", "remind"], "task_done only allows create_task"),
+    then: S.enum(["create_task", "tell_next", "drop", "set_priority", "move_due", "remind"], "task_done allows create_task or tell_next"),
     new_title: S.str("create_task: the new task's title; {task} stands for the finished task's title"),
     new_project: ref("create_task: project for the new task (default: the finished task's)"),
     due_in_days: S.int("create_task: due this many days after it's added"),
@@ -101,7 +101,7 @@ export const ruleExecutors: Record<string, Exec> = {
     const a = z.object({
       label: z.string().trim().min(1).max(200), when: z.enum(["task_done", "not_done_by"]),
       title_has: opt(z.string().trim().max(120)), project: opt(idOrName), area: opt(idOrName), task_id: opt(z.number().int()), by_day: opt(day),
-      then: z.enum(["create_task", "drop", "set_priority", "move_due", "remind"]),
+      then: z.enum(["create_task", "tell_next", "drop", "set_priority", "move_due", "remind"]),
       new_title: opt(z.string().trim().min(1).max(200)), new_project: opt(idOrName), due_in_days: opt(z.number().int().min(0).max(365)),
       estimate_minutes: opt(z.number().int().min(5).max(24 * 60)), priority: opt(z.enum(["high", "normal", "low"])), days: opt(z.number().int().min(1).max(365)),
     }).parse(raw);
@@ -117,7 +117,7 @@ export const ruleExecutors: Record<string, Exec> = {
       const area = findByRef(areas, a.area);
       if (area === "unknown") return `Error: no area called ${JSON.stringify(a.area)}.`;
       if (!a.title_has && !project && !area) return "Error: say which finished tasks set it off: title_has, project or area.";
-      if (a.then !== "create_task") return "Error: when a task is finished, the rule can only add a task.";
+      if (a.then !== "create_task" && a.then !== "tell_next") return "Error: when a task is finished, the rule can add a task or tell the user what's next.";
       trigger = { on: "task_done", projectId: project?.id ?? null, areaId: area?.id ?? null, titleHas: a.title_has ?? null };
       names.project = project?.name;
       names.area = area?.name;
@@ -136,6 +136,9 @@ export const ruleExecutors: Record<string, Exec> = {
       const project = findByRef(projectList, a.new_project);
       if (project === "unknown") return `Error: no project called ${JSON.stringify(a.new_project)}.`;
       action = { do: "create_task", title: a.new_title, ...(project ? { projectId: project.id, areaId: project.categoryId } : {}), dueInDays: a.due_in_days ?? null, estimateMinutes: a.estimate_minutes ?? null, priority: a.priority ?? null };
+    } else if (a.then === "tell_next") {
+      if (a.when !== "task_done") return "Error: tell_next only works when a task is finished.";
+      action = { do: "tell_next" };
     } else if (a.then === "set_priority") action = { do: "set_priority", priority: a.priority ?? "high" };
     else if (a.then === "move_due") action = { do: "move_due", days: a.days ?? 1 };
     else if (a.then === "remind") action = { do: "remind" };

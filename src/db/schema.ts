@@ -334,7 +334,8 @@ export type AutomationAction =
   | { do: "drop" }
   | { do: "set_priority"; priority: Priority }
   | { do: "move_due"; days: number }
-  | { do: "remind"; text?: string | null };
+  | { do: "remind"; text?: string | null }
+  | { do: "tell_next" }; // task_done: Dori says what's next in the project
 export const automations = pgTable(
   "automations",
   {
@@ -376,6 +377,8 @@ export const taskLinks = pgTable(
 // --- Planning ---------------------------------------------------------------------------------------
 
 /** A piece of planned work placed in free time by the planner, or pinned there by the user. */
+/** How a passed block went, as the user marked it. */
+export type BlockOutcome = "done" | "good_enough" | "partly" | "not_done";
 export type PlanBlock = { taskId: number; start: string; end: string; pinned: boolean }; // ISO instants
 export type AtRisk = { taskId: number; reason: "late" | "unplaced"; finishesAt?: string };
 export type PlanNotice = { at: string; text: string };
@@ -405,6 +408,9 @@ export const pinnedBlocks = pgTable(
       .references(() => tasks.id, { onDelete: "cascade" }),
     start: timestamp("start", { withTimezone: true }).notNull(),
     end: timestamp("end", { withTimezone: true }).notNull(),
+    // Once the block has passed: how it went, if the user said (calendar or widget), and the task's progress then.
+    outcome: text("outcome").$type<BlockOutcome>(),
+    progress: integer("progress"),
   },
   (t) => [index("pinned_blocks_user_idx").on(t.userId)],
 );
@@ -489,6 +495,7 @@ export type DoriMeta = {
   undone?: boolean;
   proposal?: DoriProposal;
   cards?: DoriCard[];
+  fromRule?: number; // posted by an automation ("tell me what's next"), not in reply to the user
 };
 
 export const doriMessages = pgTable(

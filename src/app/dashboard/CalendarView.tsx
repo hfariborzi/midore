@@ -14,7 +14,7 @@ import { markBlock, moveBlock, pinBlock, skipTaskOn, unpinTask, type BlockState 
 import { GRAPHITE, toPalette } from "@/lib/palette";
 import { ProviderButton } from "@/components/ProviderButton";
 import board from "./board.module.css";
-import { DORI_CHANGED } from "./DoriPanel";
+import { DORI_CHANGED, TASKS_CHANGED } from "./DoriPanel";
 import { CALENDAR_CONTROLS_ID } from "./TopBar";
 
 /** Planned work from the planner, shown on the calendar next to real events. */
@@ -1118,7 +1118,10 @@ function BlockDetails({ block, tz, onClose, onChanged }: { block: PlannedBlock; 
     const r = await fn();
     setPending(false);
     if (r.error) setError(r.error);
-    else onChanged();
+    else {
+      onChanged();
+      window.dispatchEvent(new Event(TASKS_CHANGED));
+    }
   };
   const mark = (state: BlockState) => run(() => markBlock(block.taskId, block.start, block.end, state));
   const options: { id: "not_done" | "partly" | "good_enough" | "done"; label: string }[] = [

@@ -3,10 +3,10 @@
  * changes them directly (with undo). Anything another person would notice (a new event with guests, moving or
  * deleting an event, cancelling someone's booking) becomes a card the user confirms.
  */
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { db, bookings, eventTypes, schedules, type DateOverride, type TimeRange } from "@/db";
+import { db, bookings, eventTypes, pinnedBlocks, schedules, type DateOverride, type TimeRange } from "@/db";
 import type { ToolDef } from "../ai/client";
 import { calendarsForAccounts, eventsForAccounts, listAccounts, writeTargets } from "../calendar";
 import type { Recurrence } from "../calendar/recurrence";
@@ -16,6 +16,7 @@ import { fetchFeed, parseIcs } from "../feeds";
 import { eventKey, labelEvents, listCategories } from "../labels";
 import { planBlocks } from "../plan-view";
 import { todayIn } from "../planner";
+import { planHistory } from "../planner/history";
 import { listTasks } from "../tasks";
 import type { ToolContext } from "./tools";
 
@@ -52,6 +53,10 @@ export const CALENDAR_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "event_details", description: "Who is invited to one meeting (names and their answers), who organized it, where it is and its video link. Only when the user asks about that meeting.", parameters: S.obj({ event_ref: S.str("e.g. e3") }, ["event_ref"]) } },
   { type: "function", function: { name: "read_calendar_feed", description: "Read a calendar link the user pasted (Canvas, D2L, Moodle, Outlook or any .ics / webcal link) and return its upcoming items, so you can propose_plan them as tasks with due dates.", parameters: S.obj({ url: S.str() }, ["url"]) } },
   { type: "function", function: { name: "time_report", description: "Where time went (or is going) between two days: meeting hours by area and by calendar, planned work hours by area, and tasks finished per area.", parameters: S.obj({ from_day: S.str("YYYY-MM-DD"), to_day: S.str("YYYY-MM-DD") }, ["from_day", "to_day"]) } },
+  { type: "function", function: { name: "plan_history", description: "Planned work against what got done, day by day, for past days (\"am I keeping my Wednesday writing mornings?\", \"how did last week go against the plan?\"). Each passed block counts as done, partly, done_later, missed or dropped. Narrow it to a weekday, a time window and a project or area.", parameters: S.obj({
+    weekday: S.int("1 = Monday … 7 = Sunday"), from: S.str("HH:mm: only planned time after this"), to: S.str("HH:mm: only planned time before this"),
+    weeks: S.int("How many weeks back, default 6, at most 26"), project_id: S.int(), area_id: S.int(),
+  }) } },
   { type: "function", function: { name: "list_booking_pages", description: "The user's booking pages (the links people use to book time with them): title, lengths, link, on or off.", parameters: S.obj({}) } },
   { type: "function", function: { name: "create_booking_page", description: "Make a new booking page (a link people use to book time with the user), with a video link by default. The user can fine-tune it under Booking pages.", parameters: S.obj({
     title: S.str("e.g. Office hours"), minutes: S.arr(S.int(), "Lengths people can pick"), description: S.str("One or two lines shown to people booking"),
@@ -78,6 +83,7 @@ export const CALENDAR_TOOL_STATUS: Record<string, string> = {
   list_booking_pages: "Looking at your booking pages",
   read_calendar_feed: "Reading that calendar",
   time_report: "Adding up your time",
+  plan_history: "Looking back at your plans",
   create_booking_page: "Making a booking page",
   update_booking_page: "Updating your booking pages",
   block_booking_time: "Blocking booking time",
@@ -206,6 +212,33 @@ export const calendarExecutors: Record<string, Exec> = {
     const items = parseIcs(got.text, ctx.user.timezone, todayIn(ctx.user.timezone));
     if (!items.length) return "The calendar has nothing coming up in the next four months.";
     return JSON.stringify({ upcoming: items, note: "Offer these as tasks with due dates (propose_plan), in a project named after the course or source; skip lectures and other regular classes unless asked." });
+  },
+
+  async plan_history(ctx, raw) {
+    const a = z.object({
+      weekday: opt(z.number().int().min(1).max(7)), from: opt(time), to: opt(time), weeks: opt(z.number().int().min(1).max(26)),
+      project_id: opt(z.number().int()), area_id: opt(z.number().int()),
+    }).parse(raw);
+    const tz = ctx.user.timezone;
+    const weeks = a.weeks ?? 6;
+    // A little further back than asked, so the first block in range knows the task's progress before it.
+    const since = DateTime.now().setZone(tz).startOf("day").minus({ days: weeks * 7 + 60 }).toJSDate();
+    const rows = await db.select().from(pinnedBlocks).where(and(eq(pinnedBlocks.userId, ctx.user.id), gte(pinnedBlocks.start, since)));
+    const [first] = await db.select({ start: pinnedBlocks.start }).from(pinnedBlocks).where(eq(pinnedBlocks.userId, ctx.user.id)).orderBy(asc(pinnedBlocks.start)).limit(1);
+    const all = await listTasks(ctx.user.id);
+    const h = planHistory(
+      rows.map((b) => ({ taskId: b.taskId, start: b.start.getTime(), end: b.end.getTime(), outcome: b.outcome, progress: b.progress })),
+      all.map((t) => ({ id: t.id, title: t.title, status: t.status, completedAt: t.completedAt?.getTime() ?? null, projectId: t.projectId, categoryId: t.categoryId })),
+      { tz, now: Date.now(), weeks, weekday: a.weekday, from: a.from, to: a.to, projectIds: a.project_id ? [a.project_id] : undefined, areaIds: a.area_id ? [a.area_id] : undefined },
+    );
+    const nz = (o: Record<string, number>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v).map(([k, v]) => [`${k}_min`, v]));
+    const days = h.days.slice(0, a.weekday ? 26 : 42).map((d) => ({ day: d.day, weekday: d.weekday, ...nz({ planned: d.planned, done: d.done, partly: d.partly, done_later: d.doneLater, missed: d.missed, dropped: d.dropped }), ...(d.blocks.length ? { blocks: d.blocks.slice(0, 6) } : {}) }));
+    return JSON.stringify({
+      history_starts: first ? first.start.toLocaleDateString("en-CA", { timeZone: tz }) : null,
+      note: "Only planned work is counted; time the user spent without a plan block isn't. Days listed with nothing planned had no planned work in that window (often meetings took it).",
+      total: nz({ planned: h.total.planned, done: h.total.done, partly: h.total.partly, done_later: h.total.doneLater, missed: h.total.missed, dropped: h.total.dropped }),
+      days,
+    });
   },
 
   async time_report(ctx, raw) {

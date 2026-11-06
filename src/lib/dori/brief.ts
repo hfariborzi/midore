@@ -54,7 +54,7 @@ export function checkInLabel(c: CheckIn): string {
 
 /** What Dori is asked when a check-in opens her (stored as the user's message). */
 export function checkInPrompt(c: CheckIn): string {
-  if (c.topic === "week_review") return "Week review, please: what I finished this week, what slipped and why, and what next week should focus on. Then ask me how the week felt.";
+  if (c.topic === "week_review") return "Week review, please: what I finished this week, how much planned work got done (plan_history, 1 week), what slipped and why, and what next week should focus on. Then ask me how the week felt.";
   if (c.topic === "day_wrap") return "Wrap up my day, please: what got done, what's left, and what should move to tomorrow.";
   if (c.topic === "habits") return "Habit report, please: how are my habits and repeating tasks going?";
   return `Check-in: ${c.text ?? "how are things going?"}`;

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import { db, doriMessages, plans } from "@/db";
 import { aiConfigured } from "@/lib/ai";
 import { speechAvailable } from "@/lib/ai/audio";
@@ -10,6 +10,17 @@ import { greetingName } from "@/lib/dori/context";
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // ?after=<id>: only messages newer than the last one the page has (a rule may have posted one).
+  const after = Number(req.nextUrl.searchParams.get("after")) || 0;
+  if (after) {
+    const newer = await db
+      .select()
+      .from(doriMessages)
+      .where(and(eq(doriMessages.userId, user.id), gt(doriMessages.id, after)))
+      .orderBy(asc(doriMessages.id))
+      .limit(20);
+    return NextResponse.json({ messages: newer.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta, at: m.createdAt })) }, { headers: { "Cache-Control": "no-store" } });
+  }
   const before = Number(req.nextUrl.searchParams.get("before")) || 0;
   const rows = await db
     .select()

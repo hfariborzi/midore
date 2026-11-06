@@ -7,7 +7,7 @@ import { PRIORITY_LABEL } from "@/lib/labels/core";
 import { Dori, type DoriMood } from "@/components/Dori";
 import { blockedTaskIds, compareTasks, dueLabel, formatEstimate, isComplete, progress } from "@/lib/tasks/core";
 import { repeatLabel } from "@/lib/tasks/repeat";
-import { OPEN_DORI, type OpenDoriDetail } from "../DoriPanel";
+import { OPEN_DORI, TASKS_CHANGED, type OpenDoriDetail } from "../DoriPanel";
 import { addTaskLink, deleteProject, deleteTask, deleteTaskLink, promoteResidue, saveProject, saveTask, setTaskStatus, type TaskInput } from "../actions";
 import { GRAPHITE, toPalette } from "@/lib/palette";
 
@@ -28,6 +28,7 @@ export function TasksBoard({ categories, projects, tasks, links, today, places =
     start(async () => {
       const r = await fn();
       if (r.error) setError(r.error);
+      else window.dispatchEvent(new Event(TASKS_CHANGED)); // a rule may have had Dori say something
     });
   };
 

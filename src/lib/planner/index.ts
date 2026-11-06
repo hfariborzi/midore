@@ -4,9 +4,9 @@
  * dirty (a task changed, a calendar push notification arrived) or when the stored plan is older than
  * STALE_MS, the next read recomputes it.
  */
-import { and, asc, eq, gte, isNull, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, or } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { db, dayNotes, pinnedBlocks, plans, users, type DayNote, type Plan, type PlanBlock, type Project, type User, type WeeklyHours } from "@/db";
+import { db, dayNotes, pinnedBlocks, plans, tasks, users, type DayNote, type Plan, type PlanBlock, type Project, type User, type WeeklyHours } from "@/db";
 import { listAccounts, isConnected, providerFor } from "../calendar";
 import type { Interval } from "../calendar/types";
 import { ensureDefaults } from "../data";
@@ -151,10 +151,12 @@ async function keepPastBlocks(userId: number, prev: Plan, taskIds: Set<number>) 
   const since = new Date(Math.min(...ended.map((b) => Date.parse(b.start))));
   const kept = await db.select().from(pinnedBlocks).where(and(eq(pinnedBlocks.userId, userId), gte(pinnedBlocks.start, since)));
   const have = new Set(kept.map((k) => `${k.taskId}:${k.start.getTime()}`));
-  const rows = ended
-    .filter((b) => !have.has(`${b.taskId}:${Date.parse(b.start)}`))
-    .map((b) => ({ userId, taskId: b.taskId, start: new Date(b.start), end: new Date(b.end) }));
-  if (rows.length) await db.insert(pinnedBlocks).values(rows);
+  const fresh = ended.filter((b) => !have.has(`${b.taskId}:${Date.parse(b.start)}`));
+  if (!fresh.length) return;
+  // The task's progress when the block is kept: a rise from one block to the next shows work happened.
+  const ids = [...new Set(fresh.map((b) => b.taskId))];
+  const progress = new Map((await db.select({ id: tasks.id, progress: tasks.progress }).from(tasks).where(and(eq(tasks.userId, userId), inArray(tasks.id, ids)))).map((t) => [t.id, t.progress]));
+  await db.insert(pinnedBlocks).values(fresh.map((b) => ({ userId, taskId: b.taskId, start: new Date(b.start), end: new Date(b.end), progress: progress.get(b.taskId) ?? null })));
 }
 
 /**

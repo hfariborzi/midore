@@ -33,10 +33,13 @@ export async function markBlockFor(user: User, taskId: number, start: string, en
     .from(pinnedBlocks)
     .where(and(eq(pinnedBlocks.userId, user.id), eq(pinnedBlocks.taskId, taskId), eq(pinnedBlocks.start, s)))
     .limit(1);
-  if (!have) await db.insert(pinnedBlocks).values({ userId: user.id, taskId, start: s, end: e });
+  const progress = state.status === "partly" ? Math.round(Math.min(95, Math.max(5, state.progress))) : state.status === "not_done" ? 0 : 100;
+  // The outcome stays on the block, so "am I keeping my Wednesday mornings?" can be answered later.
+  if (have) await db.update(pinnedBlocks).set({ outcome: state.status, progress }).where(eq(pinnedBlocks.id, have.id));
+  else await db.insert(pinnedBlocks).values({ userId: user.id, taskId, start: s, end: e, outcome: state.status, progress });
 
   if (state.status === "partly") {
-    const pct = Math.round(Math.min(95, Math.max(5, state.progress)));
+    const pct = progress;
     if (task.status !== "open") await applyStatus(user.id, task, "open", undefined, user.timezone);
     await db.update(tasks).set({ progress: pct, updatedAt: new Date() }).where(and(eq(tasks.id, taskId), eq(tasks.userId, user.id)));
   } else if (state.status === "not_done") {
@@ -58,7 +61,7 @@ export async function keepTodaysBlocks(user: User, taskId: number) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: user.timezone });
   const rows = plan.blocks
     .filter((b) => b.taskId === taskId && !b.pinned && new Date(b.start).toLocaleDateString("en-CA", { timeZone: user.timezone }) === today)
-    .map((b) => ({ userId: user.id, taskId, start: new Date(b.start), end: new Date(b.end) }));
+    .map((b) => ({ userId: user.id, taskId, start: new Date(b.start), end: new Date(b.end), progress: 100 }));
   if (rows.length) await db.insert(pinnedBlocks).values(rows);
 }
 

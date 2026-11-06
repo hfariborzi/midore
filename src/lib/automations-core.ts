@@ -44,6 +44,18 @@ export function describe(trigger: AutomationTrigger, action: AutomationAction, n
           ? `make it ${action.priority} priority`
           : action.do === "move_due"
             ? `move its due date ${action.days} day${action.days === 1 ? "" : "s"} later`
-            : "remind me";
+            : action.do === "tell_next"
+              ? "tell me what's next"
+              : "remind me";
   return `${when}, ${then}.`;
+}
+
+export type NextStep = { title: string; at: string | null; waitingOn?: string | null };
+
+/** What Dori says when a "tell me what's next" rule runs: the next open tasks in the same project or area. */
+export function nextStepsMessage(doneTitle: string, group: string | null, next: NextStep[]): string {
+  const done = `“${doneTitle}” is done.`;
+  if (!next.length) return group ? `${done} That was the last open task in ${group}.` : `${done} Nothing else is waiting with it.`;
+  const line = (n: NextStep) => `- ${n.title} (${n.waitingOn ? `waiting on ${n.waitingOn}` : n.at ? `planned ${n.at}` : "not planned yet"})`;
+  return `${done} Next${group ? ` in ${group}` : ""}:\n${next.map(line).join("\n")}`;
 }

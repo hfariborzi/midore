@@ -5,9 +5,9 @@
  */
 import { and, asc, eq, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { automations, db, tasks, users, type Automation, type Task } from "@/db";
+import { automations, categories, db, doriMessages, plans, projects, tasks, users, type Automation, type Task } from "@/db";
 import { logError } from "./log";
-import { matchesDone, renderTitle, ruleMark } from "./automations-core";
+import { matchesDone, nextStepsMessage, renderTitle, ruleMark } from "./automations-core";
 
 export const MAX_AUTOMATIONS = 30;
 
@@ -42,12 +42,49 @@ async function addTask(rule: Automation, from: Pick<Task, "title" | "projectId" 
   });
 }
 
+/** "Tell me what's next": Dori posts the next open tasks in the finished task's project (or area), soonest planned first. */
+async function tellNext(rule: Automation, done: Task, tz: string) {
+  const [user] = await db.select({ consent: users.doriConsentAt }).from(users).where(eq(users.id, rule.userId)).limit(1);
+  if (!user?.consent) return false; // Dori is off
+  const scope = done.projectId ? eq(tasks.projectId, done.projectId) : done.categoryId ? eq(tasks.categoryId, done.categoryId) : null;
+  let group: string | null = null;
+  if (done.projectId) group = (await db.select({ n: projects.name }).from(projects).where(eq(projects.id, done.projectId)).limit(1))[0]?.n ?? null;
+  else if (done.categoryId) group = (await db.select({ n: categories.name }).from(categories).where(eq(categories.id, done.categoryId)).limit(1))[0]?.n ?? null;
+  const open = scope
+    ? await db.select().from(tasks).where(and(eq(tasks.userId, rule.userId), eq(tasks.status, "open"), scope)).orderBy(asc(tasks.position), asc(tasks.id))
+    : [];
+  const [plan] = await db.select({ blocks: plans.blocks }).from(plans).where(eq(plans.userId, rule.userId)).limit(1);
+  const now = Date.now();
+  const firstBlock = new Map<number, number>();
+  for (const b of plan?.blocks ?? []) {
+    const s = Date.parse(b.start);
+    if (Date.parse(b.end) > now && !(firstBlock.get(b.taskId)! <= s)) firstBlock.set(b.taskId, s);
+  }
+  const today = DateTime.now().setZone(tz).toISODate();
+  const when = (ms: number) => {
+    const d = DateTime.fromMillis(ms, { zone: tz });
+    return `${d.toISODate() === today ? "today" : d.toFormat("ccc d LLL")} at ${d.toFormat("H:mm")}`;
+  };
+  const next = open
+    .filter((t) => t.id !== done.id)
+    .sort((a, b) => (firstBlock.get(a.id) ?? Infinity) - (firstBlock.get(b.id) ?? Infinity))
+    .slice(0, 3)
+    .map((t) => ({ title: t.title, at: firstBlock.has(t.id) ? when(firstBlock.get(t.id)!) : null, waitingOn: t.waitingOn }));
+  await db.insert(doriMessages).values({ userId: rule.userId, role: "assistant", content: nextStepsMessage(done.title, group, next), meta: { fromRule: rule.id, mood: "happy" } });
+  return true;
+}
+
 /** After a task is finished: run every rule it sets off. Errors are logged, never shown; the task stays done. */
 export async function runDoneRules(userId: number, task: Task, tz: string): Promise<number> {
   try {
     const rules = (await listAutomations(userId)).filter((r) => r.enabled && matchesDone(r.trigger, task, r.id));
+    let told = false;
     for (const rule of rules.slice(0, 5)) {
-      await addTask(rule, task, tz);
+      if (rule.action.do === "tell_next") {
+        // One "what's next" message per finished task, however many rules ask for it.
+        if (told || !(await tellNext(rule, task, tz))) continue;
+        told = true;
+      } else await addTask(rule, task, tz);
       await counted(rule.id);
     }
     return rules.length;

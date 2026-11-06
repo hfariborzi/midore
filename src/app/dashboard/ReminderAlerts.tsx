@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Bell, Check, X } from "lucide-react";
 import type { Alert } from "@/lib/tasks";
 import { setTaskStatus } from "./actions";
+import { TASKS_CHANGED } from "./DoriPanel";
 
 const LATE_MS = 10 * 60_000; // an alert missed by more than this (the tab was asleep) is not shown
 const noSubscribe = () => () => {};
@@ -49,6 +50,7 @@ export function ReminderAlerts({ alerts }: { alerts: Alert[] }) {
   const done = (a: Alert) =>
     start(async () => {
       await setTaskStatus({ id: a.taskId, status: "done" });
+      window.dispatchEvent(new Event(TASKS_CHANGED));
       dismiss(a);
       router.refresh();
     });
