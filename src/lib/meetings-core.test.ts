@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendLine, forModel, meetingStartingNow, stamp } from "./meetings-core.ts";
+import { appendLine, appendPiece, forModel, meetingStartingNow, stamp } from "./meetings-core.ts";
 
 test("timestamps and transcript lines", () => {
   assert.equal(stamp(75), "01:15");
@@ -31,4 +31,17 @@ test("long transcripts keep their start and end", () => {
   const cut = forModel(t, 100);
   assert.ok(cut.startsWith("a".repeat(50)) && cut.endsWith("b".repeat(50)) && cut.includes("left out"));
   assert.equal(forModel("short", 100), "short");
+});
+
+test("a minute of speech becomes timed lines", () => {
+  const text = "First item, the budget. We agreed to cut travel. Second item, the talk. We chose the short version. That's it.";
+  const out = appendPiece("", 60, text, 60);
+  const lines = out.split("\n");
+  assert.ok(lines.length >= 3, out);
+  assert.ok(lines[0].startsWith("[01:00] First item, the budget."), out);
+  const secs = lines.map((l) => { const [m, s] = l.slice(1, 6).split(":").map(Number); return m * 60 + s; });
+  assert.deepEqual([...secs].sort((a, b) => a - b), secs); // in order
+  assert.ok(secs.at(-1)! > 60 && secs.at(-1)! < 120);
+  assert.equal(appendPiece("[00:00] Hi", 60, "   ", 60), "[00:00] Hi");
+  assert.equal(appendPiece("", 0, "no punctuation at all here", 30), "[00:00] no punctuation at all here");
 });

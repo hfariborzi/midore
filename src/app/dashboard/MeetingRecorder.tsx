@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, Loader2, Mic, NotebookPen, Pause, Play, Square, X } from "lucide-react";
+import type { MeetingPoint } from "@/db/schema";
+import { stamp } from "@/lib/meetings-core";
 
 /** Start a meeting from anywhere (the Meetings page, a calendar event). */
 export const START_MEETING = "midore:start-meeting";
@@ -51,7 +53,12 @@ export function MeetingRecorder() {
   const [session, setSession] = useState<Session | null>(null);
   const [paused, setPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [lines, setLines] = useState<string[]>([]);
+  const [lines, setLines] = useState<{ at: number; text: string }[]>([]);
+  const [tab, setTab] = useState<"points" | "transcript" | "notes">("points");
+  const [points, setPoints] = useState<MeetingPoint[]>([]);
+  const [pointsBusy, setPointsBusy] = useState(false);
+  const pointsFor = useRef(0); // transcript pieces the key points were last made from
+  const pointsAt = useRef(0); // when they were last asked for
   const [notes, setNotes] = useState("");
   const [open, setOpen] = useState(true);
   const [phase, setPhase] = useState<"idle" | "starting" | "live" | "finishing">("idle");
@@ -133,7 +140,7 @@ export function MeetingRecorder() {
           const res = await fetch(`/api/meetings/${s.id}/audio`, { method: "POST", body: form });
           const d = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
           if (res.ok) {
-            if (d.text) setLines((l) => [...l.slice(-200), d.text!]);
+            if (d.text) setLines((l) => [...l.slice(-300), { at: offsetSec, text: d.text! }]);
             return;
           }
           if (res.status === 409 || res.status === 429) {
@@ -237,6 +244,10 @@ export function MeetingRecorder() {
       sessionRef.current = s;
       setSession(s);
       setLines([]);
+      setPoints([]);
+      pointsFor.current = 0;
+      pointsAt.current = 0;
+      setTab(record ? "points" : "notes");
       setNotes("");
       setElapsed(0);
       setPaused(false);
@@ -256,6 +267,30 @@ export function MeetingRecorder() {
       setPhase("idle");
     }
   };
+
+  // Key points so far: refreshed when the tab is showing and new transcript has come in, at most once a minute.
+  useEffect(() => {
+    if (!session?.recorded || !open || tab !== "points" || lines.length <= pointsFor.current) return;
+    const wait = Math.max(0, 60_000 - (Date.now() - pointsAt.current));
+    const t = window.setTimeout(async () => {
+      pointsAt.current = Date.now();
+      pointsFor.current = lines.length;
+      setPointsBusy(true);
+      try {
+        const res = await fetch(`/api/meetings/${session.id}/points`, { method: "POST" });
+        const d = (await res.json().catch(() => ({}))) as { points?: MeetingPoint[] };
+        if (d.points && sessionRef.current?.id === session.id) setPoints(d.points);
+      } catch {}
+      setPointsBusy(false);
+    }, wait);
+    return () => window.clearTimeout(t);
+  }, [session, open, tab, lines.length]);
+
+  // The transcript tab follows the newest line.
+  const transcriptEnd = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (tab === "transcript") transcriptEnd.current?.scrollIntoView({ block: "end" });
+  }, [tab, lines.length]);
 
   // The clock.
   useEffect(() => {
@@ -408,21 +443,78 @@ export function MeetingRecorder() {
             </button>
           </div>
           {open && (
-            <div className="border-t border-line px-3 py-2">
+            <div className="border-t border-line">
               {session.recorded && (
-                <div className="mb-2 max-h-32 overflow-y-auto text-xs leading-relaxed text-muted">
-                  {lines.length ? lines.slice(-6).map((l, i) => <p key={i}>{l}</p>) : <p className="text-faint">The transcript appears here a minute at a time.</p>}
+                <div role="tablist" aria-label="Meeting" className="flex gap-1 px-2 pt-2">
+                  {(
+                    [
+                      ["points", "Key points"],
+                      ["transcript", "Transcript"],
+                      ["notes", "Notes"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={tab === id}
+                      onClick={() => setTab(id)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium ${tab === id ? "bg-accent-subtle text-accent-soft" : "text-muted hover:bg-hover hover:text-ink"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               )}
-              <label className="sr-only" htmlFor="meeting-notes">Your notes</label>
-              <textarea
-                id="meeting-notes"
-                className="input min-h-24 w-full resize-y text-sm"
-                placeholder="Your notes: decisions, who does what…"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-              {warning && <p className="mt-1 text-xs text-warning" role="status">{warning}</p>}
+              <div className="px-3 py-2">
+                {session.recorded && tab === "points" && (
+                  <div role="tabpanel" className="max-h-56 min-h-24 overflow-y-auto text-sm">
+                    {points.length ? (
+                      <ul className="space-y-1.5">
+                        {points.map((p, i) => (
+                          <li key={i} className="flex gap-2 leading-snug">
+                            <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${p.turn ? "bg-vermilion" : "bg-faint"}`} aria-hidden />
+                            <span className="min-w-0 flex-1 text-ink">
+                              {p.text}
+                              {p.turn && <span className="ml-1.5 text-xs font-medium text-vermilion">Turning point</span>}
+                              {p.at && <span className="ml-1.5 text-xs text-faint tabular-nums">{p.at}</span>}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-faint">{lines.length ? "Picking out the key points…" : "Key points appear here as the meeting goes, about a minute behind."}</p>
+                    )}
+                    {pointsBusy && points.length > 0 && <p className="mt-2 text-xs text-faint">Updating…</p>}
+                  </div>
+                )}
+                {session.recorded && tab === "transcript" && (
+                  <div role="tabpanel" className="max-h-56 min-h-24 overflow-y-auto text-xs leading-relaxed text-muted">
+                    {lines.length ? (
+                      lines.map((l, i) => (
+                        <p key={i} className="mb-1.5">
+                          <span className="mr-1.5 text-faint tabular-nums">{stamp(l.at)}</span>
+                          {l.text}
+                        </p>
+                      ))
+                    ) : (
+                      <p className="text-faint">The transcript appears here a minute at a time.</p>
+                    )}
+                    <div ref={transcriptEnd} />
+                  </div>
+                )}
+                <div role="tabpanel" hidden={session.recorded && tab !== "notes"}>
+                  <label className="sr-only" htmlFor="meeting-notes">Your notes</label>
+                  <textarea
+                    id="meeting-notes"
+                    className="input min-h-28 w-full resize-y text-sm"
+                    placeholder="Your notes: decisions, who does what…"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
+                {warning && <p className="mt-1 text-xs text-warning" role="status">{warning}</p>}
+              </div>
             </div>
           )}
         </section>

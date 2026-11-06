@@ -19,7 +19,8 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     // Keep tasks already made from the old action items, matched by their text.
     const made = new Map((m.summary?.actions ?? []).filter((a) => a.taskId).map((a) => [a.text, a.taskId]));
     const merged = summary ? { ...summary, actions: summary.actions.map((a) => ({ ...a, taskId: made.get(a.text) ?? null })) } : null;
-    if (merged) await db.update(meetings).set({ summary: merged }).where(eq(meetings.id, m.id));
+    // Nothing to summarise: drop the running key points rather than leave them looking final.
+    if (merged || m.summary?.live) await db.update(meetings).set({ summary: merged }).where(eq(meetings.id, m.id));
     return NextResponse.json({ id: m.id, summary: merged });
   } catch (err) {
     logError("meeting summary", err);

@@ -523,7 +523,15 @@ export const doriMessages = pgTable(
 
 export type MeetingStatus = "recording" | "done";
 export type MeetingAction = { text: string; who: string; due?: string | null; taskId?: number | null };
-export type MeetingSummary = { summary: string[]; decisions: string[]; actions: MeetingAction[] };
+/** One key point: what happened, where in the transcript ("12:30"), and whether the discussion turned there. */
+export type MeetingPoint = { text: string; at: string | null; turn: boolean };
+export type MeetingSummary = {
+  summary: string[]; // the key points as plain text (older meetings have only this)
+  points?: MeetingPoint[];
+  decisions: string[];
+  actions: MeetingAction[];
+  live?: boolean; // key points so far, while the meeting is still going
+};
 
 /**
  * A meeting the user recorded or took notes in. Audio is transcribed a minute at a time and never stored; the

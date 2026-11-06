@@ -4,7 +4,7 @@ import { db, meetings } from "@/db";
 import { audioFormat, speechAvailable, transcribe } from "@/lib/ai/audio";
 import { getCurrentUser } from "@/lib/auth";
 import { logError } from "@/lib/log";
-import { appendLine } from "@/lib/meetings-core";
+import { appendPiece } from "@/lib/meetings-core";
 import { CHUNK_MAX_BYTES, getMeeting, MAX_MEETING_HOURS, meetingRoomLeft, recordMeetingSeconds } from "@/lib/meetings";
 import { rateLimitKey, RateLimitError } from "@/lib/rate-limit";
 
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await recordMeetingSeconds(user.id, seconds || 60);
     // Re-read so pieces finishing close together don't overwrite each other's lines.
     const fresh = (await getMeeting(user.id, m.id))!;
-    await db.update(meetings).set({ transcript: appendLine(fresh.transcript, offset, text), seconds: fresh.seconds + Math.round(seconds || 0) }).where(eq(meetings.id, m.id));
+    await db.update(meetings).set({ transcript: appendPiece(fresh.transcript, offset, text, seconds || 60), seconds: fresh.seconds + Math.round(seconds || 0) }).where(eq(meetings.id, m.id));
     return NextResponse.json({ text });
   } catch (err) {
     logError("meeting transcribe", err);

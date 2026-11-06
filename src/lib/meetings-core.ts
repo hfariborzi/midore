@@ -19,6 +19,33 @@ export function appendLine(transcript: string, offset: number, text: string): st
   return `${transcript}${transcript ? "\n" : ""}[${stamp(offset)}] ${t}`;
 }
 
+/**
+ * Add one transcribed piece of `duration` seconds that starts `offset` seconds in. The piece is split into
+ * sentences, each timed by where it falls in the piece (speech runs at a fairly even pace), and sentences are
+ * grouped into lines at least ~10 seconds apart, so times in the transcript and in key points mean something.
+ */
+export function appendPiece(transcript: string, offset: number, text: string, duration: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return transcript;
+  const sentences = t.match(/[^.!?…]+(?:[.!?…]+["'”’)]*\s*|$)/g)?.map((x) => x.trim()).filter(Boolean) ?? [t];
+  const span = duration > 0 ? duration : 60;
+  let out = transcript;
+  let line = "";
+  let lineAt = offset;
+  let pos = 0;
+  for (const s of sentences) {
+    const at = offset + (pos / t.length) * span;
+    if (line && at - lineAt >= 10) {
+      out = appendLine(out, lineAt, line);
+      line = "";
+    }
+    if (!line) lineAt = at;
+    line = line ? `${line} ${s}` : s;
+    pos += s.length + 1;
+  }
+  return appendLine(out, lineAt, line);
+}
+
 type Ev = { id: string; seriesId?: string; accountId: number; title: string; start: string; end: string; allDay: boolean; meetLink?: string; attendees: unknown[]; myResponse?: string };
 
 /**
