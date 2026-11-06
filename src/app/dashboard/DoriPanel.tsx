@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { CalendarPlus, Check, CircleDashed, Loader2, Mail, Mic, Send, Square, Trash2, Undo2, Volume2, VolumeX, X } from "lucide-react";
+import { CalendarClock, CalendarPlus, CalendarX, Check, CircleDashed, Loader2, Mail, Mic, Send, Square, Trash2, Undo2, Video, Volume2, VolumeX, X } from "lucide-react";
 import type { DoriCard, DoriMeta, DoriMood, DoriProposal } from "@/db/schema";
 import { Dori } from "@/components/Dori";
-import { acceptDoriProposal, clearDoriConversation, confirmDoriEvent, discardDoriProposal, dismissDoriEvent, setDoriEnabled, undoDoriMessage } from "./dori-actions";
+import { acceptDoriProposal, clearDoriConversation, confirmDoriBookingCancel, confirmDoriEvent, confirmDoriEventChange, discardDoriProposal, dismissDoriEvent, setDoriEnabled, undoDoriMessage } from "./dori-actions";
 
 type Msg = { id: number; role: "user" | "assistant"; content: string; meta: DoriMeta };
 type State = { available: boolean; enabled: boolean; name: string; voice: boolean; news: number; messages: Msg[] };
@@ -505,7 +505,8 @@ function Message({ m, onChanged, onListen }: { m: Msg; onChanged: () => Promise<
 }
 
 function Card({ card, index, messageId, act, pending }: { card: DoriCard; index: number; messageId: number; act: (fn: () => Promise<{ error?: string }>) => Promise<void>; pending: boolean }) {
-  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   if (card.kind === "emails")
     return (
       <div className="space-y-1.5 rounded-xl border border-line bg-paper p-3">
@@ -521,7 +522,15 @@ function Card({ card, index, messageId, act, pending }: { card: DoriCard; index:
     return (
       <div className="rounded-xl border border-line bg-paper p-3 text-sm">
         <div className="font-medium text-ink">{card.title}</div>
-        <div className="text-xs text-muted">{fmt(card.start)} – {new Date(card.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}{card.attendees.length ? ` · ${card.attendees.length} invited` : ""}</div>
+        <div className="text-xs text-muted">{fmt(card.start)} – {time(card.end)}{card.attendees.length ? ` · ${card.attendees.length} invited` : ""}</div>
+        {(card.repeatLabel || card.onlineMeeting || card.calendarLabel || card.location) && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
+            {card.repeatLabel && <span>{card.repeatLabel}</span>}
+            {card.onlineMeeting && <span className="inline-flex items-center gap-1"><Video size={12} /> Video link</span>}
+            {card.location && <span className="truncate">{card.location}</span>}
+            {card.calendarLabel && <span className="truncate">{card.calendarLabel}</span>}
+          </div>
+        )}
         {card.status === "pending" ? (
           <div className="mt-2 flex gap-2">
             <button type="button" className="btn-primary py-1 text-xs" disabled={pending} onClick={() => act(() => confirmDoriEvent(messageId, index))}><CalendarPlus size={14} /> Add to calendar</button>
@@ -529,6 +538,47 @@ function Card({ card, index, messageId, act, pending }: { card: DoriCard; index:
           </div>
         ) : (
           <div className="mt-1 text-xs text-faint">{card.status === "added" ? "Added to your calendar" : "Dismissed"}</div>
+        )}
+      </div>
+    );
+  if (card.kind === "event_change")
+    return (
+      <div className="rounded-xl border border-line bg-paper p-3 text-sm">
+        <div className="font-medium text-ink">{card.title}</div>
+        <div className="text-xs text-muted">
+          {card.action === "move" && card.newStart && card.newEnd ? (
+            <><span className="line-through">{fmt(card.start)}</span> → {fmt(card.newStart)} – {time(card.newEnd)}</>
+          ) : (
+            <>{fmt(card.start)} – {time(card.end)}</>
+          )}
+        </div>
+        {card.status === "pending" ? (
+          <div className="mt-2 flex gap-2">
+            <button type="button" className="btn-primary py-1 text-xs" disabled={pending} onClick={() => act(() => confirmDoriEventChange(messageId, index))}>
+              {card.action === "move" ? <><CalendarClock size={14} /> Move it</> : <><CalendarX size={14} /> Delete it</>}
+            </button>
+            <button type="button" className="btn-ghost py-1 text-xs" disabled={pending} onClick={() => act(() => dismissDoriEvent(messageId, index))}>Keep as is</button>
+          </div>
+        ) : (
+          <div className="mt-1 text-xs text-faint">{card.status === "done" ? (card.action === "move" ? "Moved" : "Deleted") : "Left as it was"}</div>
+        )}
+      </div>
+    );
+  if (card.kind === "booking_cancel")
+    return (
+      <div className="rounded-xl border border-line bg-paper p-3 text-sm">
+        <div className="font-medium text-ink">{card.title} with {card.who}</div>
+        <div className="text-xs text-muted">{fmt(card.start)} – {time(card.end)}</div>
+        {card.status === "pending" ? (
+          <>
+            <p className="mt-1 text-xs text-faint">{card.who} gets a cancellation{card.reason ? `: "${card.reason}"` : "."}</p>
+            <div className="mt-2 flex gap-2">
+              <button type="button" className="btn-primary py-1 text-xs" disabled={pending} onClick={() => act(() => confirmDoriBookingCancel(messageId, index))}><CalendarX size={14} /> Cancel booking</button>
+              <button type="button" className="btn-ghost py-1 text-xs" disabled={pending} onClick={() => act(() => dismissDoriEvent(messageId, index))}>Keep it</button>
+            </div>
+          </>
+        ) : (
+          <div className="mt-1 text-xs text-faint">{card.status === "done" ? "Cancelled" : "Kept"}</div>
         )}
       </div>
     );

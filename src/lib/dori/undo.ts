@@ -1,8 +1,8 @@
 /** Reverses what Dori did in one message, newest change first. */
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { db, categories, dayNotes, doriActions, pinnedBlocks, projects, taskLinks, tasks, users, type UndoOp } from "@/db";
+import { db, bookings, categories, dayNotes, doriActions, eventTypes, pinnedBlocks, projects, schedules, taskLinks, tasks, users, type UndoOp } from "@/db";
 
-const DATE_KEYS = new Set(["createdAt", "updatedAt", "completedAt", "start", "end"]);
+const DATE_KEYS = new Set(["createdAt", "updatedAt", "completedAt", "start", "end", "remindAt"]);
 function revive(row: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(row)) out[k] = DATE_KEYS.has(k) && typeof v === "string" ? new Date(v) : v;
@@ -61,6 +61,43 @@ async function apply(userId: number, op: UndoOp) {
     }
     case "setWorkHours":
       await db.update(users).set({ workHours: op.weekly }).where(eq(users.id, userId));
+      break;
+    case "restoreProject": {
+      const row = revive(op.row) as typeof projects.$inferInsert;
+      if (row.userId !== userId) return;
+      await db.insert(projects).values(row).onConflictDoNothing();
+      for (const t of op.tasks) await apply(userId, { op: "restoreTask", row: t, links: [] });
+      for (const l of op.links) {
+        const link = l as typeof taskLinks.$inferInsert;
+        const present = await db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.userId, userId), inArray(tasks.id, [link.fromTaskId, link.toTaskId])));
+        if (present.length === 2) await db.insert(taskLinks).values(link).onConflictDoNothing();
+      }
+      break;
+    }
+    case "patchCategory":
+      await db.update(categories).set(op.fields as Partial<typeof categories.$inferInsert>).where(and(eq(categories.id, op.id), eq(categories.userId, userId)));
+      break;
+    case "restoreCategory": {
+      const row = revive(op.row) as typeof categories.$inferInsert;
+      if (row.userId !== userId) return;
+      await db.insert(categories).values(row).onConflictDoNothing();
+      if (op.taskIds.length) await db.update(tasks).set({ categoryId: row.id }).where(and(eq(tasks.userId, userId), inArray(tasks.id, op.taskIds)));
+      if (op.projectIds.length) await db.update(projects).set({ categoryId: row.id }).where(and(eq(projects.userId, userId), inArray(projects.id, op.projectIds)));
+      break;
+    }
+    case "patchUser":
+      await db.update(users).set(op.fields as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+      break;
+    case "patchEventType":
+      await db.update(eventTypes).set(op.fields as Partial<typeof eventTypes.$inferInsert>).where(and(eq(eventTypes.id, op.id), eq(eventTypes.userId, userId)));
+      break;
+    case "deleteEventType":
+      // Only if nobody booked it yet: bookings keep their page.
+      if (!(await db.select({ id: bookings.id }).from(bookings).where(eq(bookings.eventTypeId, op.id)).limit(1)).length)
+        await db.delete(eventTypes).where(and(eq(eventTypes.id, op.id), eq(eventTypes.userId, userId)));
+      break;
+    case "patchSchedule":
+      await db.update(schedules).set(op.fields as Partial<typeof schedules.$inferInsert>).where(and(eq(schedules.id, op.id), eq(schedules.userId, userId)));
       break;
   }
 }

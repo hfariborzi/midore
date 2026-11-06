@@ -6,7 +6,9 @@ import { ProviderButton } from "@/components/ProviderButton";
 import { DoriCharacterProvider } from "@/components/Dori";
 import { CalendarView } from "./CalendarView";
 import { DoriPanel } from "./DoriPanel";
+import { alertsSoon } from "@/lib/tasks";
 import { Overlay } from "./Overlay";
+import { ReminderAlerts } from "./ReminderAlerts";
 import { TopBar } from "./TopBar";
 
 export default async function DashboardLayout({ children }: LayoutProps<"/dashboard">) {
@@ -15,6 +17,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
   const accounts = await listAccounts(user.id);
   const stale = accounts.filter((a) => !isConnected(a));
   const noneConnected = accounts.every((a) => !isConnected(a));
+  const alerts = await alertsSoon(user);
 
   return (
     <DoriCharacterProvider value={user.doriPrefs?.character ?? "puppy"}>
@@ -55,6 +58,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
         </div>
       </div>
       <Overlay>{children}</Overlay>
+      <ReminderAlerts alerts={alerts} />
     </DoriCharacterProvider>
   );
 }

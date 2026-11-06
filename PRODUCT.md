@@ -16,7 +16,7 @@ Midore is a calendar that plans your week. It brings three things people usually
 
 ## Positioning
 
-- Planning that never touches meetings: the planner is plain, deterministic code that places only the user's own work into gaps, in deadline order. It never moves or deletes events; blocks can be pinned and Dori's changes undone.
+- Planning that never touches meetings: the planner is plain, deterministic code that places only the user's own work into gaps, in deadline order. It never moves or deletes events on its own (Dori can offer to move or delete the user's own events with no other guests, after they confirm); blocks can be pinned and Dori's changes undone.
 - Booking, tasks and planning in one product, on top of the calendars people already have (Google and Microsoft, any number of accounts).
 - AI is optional and off by default; when on, it runs on providers that keep no copy of data and never train on it.
 

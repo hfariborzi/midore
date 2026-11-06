@@ -6,13 +6,13 @@
  */
 import { and, asc, eq, gte, isNull, or } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { db, dayNotes, pinnedBlocks, plans, users, type DayNote, type Plan, type PlanBlock, type User, type WeeklyHours } from "@/db";
+import { db, dayNotes, pinnedBlocks, plans, users, type DayNote, type Plan, type PlanBlock, type Project, type User, type WeeklyHours } from "@/db";
 import { listAccounts, isConnected, providerFor } from "../calendar";
 import type { Interval } from "../calendar/types";
 import { ensureDefaults } from "../data";
 import { logWarn } from "../log";
 import { listLinks, listProjects, listTasks } from "../tasks";
-import { describeMoves, freeMinutesUntil, HORIZON_DAYS, meetingSlots, plan as runPlan, type PlanInput, type PlanOutput } from "./core";
+import { describeMoves, freeMinutesUntil, HORIZON_DAYS, meetingSlots, plan as runPlan, type DayRule, type PlanInput, type PlanOutput } from "./core";
 
 export * from "./core";
 
@@ -63,6 +63,41 @@ function remainingMinutes(estimate: number | null, progress: number) {
   return Math.max(15, Math.round((estimate * (100 - Math.min(progress, 95))) / 100 / 15) * 15);
 }
 
+/** Paused, and not yet at the day it resumes on its own. */
+export function isPaused(p: Pick<Project, "status" | "pausedUntil">, today: string) {
+  return p.status === "paused" && !(p.pausedUntil && p.pausedUntil <= today);
+}
+
+/**
+ * Notes become planner rules for each day they cover: a dated note for its day, a weekday note for every
+ * matching day in the horizon, and a standing note with planner fields for every day.
+ */
+export function rulesFromNotes(notes: DayNote[], tz: string, now: number, horizonDays: number): DayRule[] {
+  const days = Array.from({ length: horizonDays + 1 }, (_, i) => DateTime.fromMillis(now, { zone: tz }).startOf("day").plus({ days: i }));
+  const steering = (n: DayNote) =>
+    !!(n.avoidEnergy || n.skipTaskIds.length || n.reserveForTaskIds.length || n.reserveForProjectIds.length || n.reserveForAreaIds.length || n.maxWorkMinutes != null || n.startAfter || n.endBy || n.bufferMinutes);
+  const rule = (n: DayNote, day: string): DayRule => ({
+    day,
+    avoidEnergy: n.avoidEnergy,
+    skipTaskIds: n.skipTaskIds,
+    reserveForTaskIds: n.reserveForTaskIds,
+    reserveForProjectIds: n.reserveForProjectIds,
+    reserveForAreaIds: n.reserveForAreaIds,
+    maxWorkMinutes: n.maxWorkMinutes,
+    window: n.windowStart && n.windowEnd ? { start: n.windowStart, end: n.windowEnd } : null,
+    startAfter: n.startAfter,
+    endBy: n.endBy,
+    bufferMinutes: n.bufferMinutes,
+  });
+  const out: DayRule[] = [];
+  for (const n of notes) {
+    if (!steering(n)) continue;
+    if (n.day) out.push(rule(n, n.day));
+    else for (const d of days) if (!n.weekday || d.weekday === n.weekday) out.push(rule(n, d.toISODate()!));
+  }
+  return out;
+}
+
 export async function loadInputs(user: User, horizonDays = HORIZON_DAYS): Promise<Inputs> {
   const now = Date.now();
   const tz = user.timezone;
@@ -78,6 +113,8 @@ export async function loadInputs(user: User, horizonDays = HORIZON_DAYS): Promis
   // A task without its own due date works toward its project's target date (people, and Dori, often give the
   // deadline once for the whole project).
   const projectTarget = new Map(projects.filter((p) => p.status !== "done" && p.targetDate).map((p) => [p.id, p.targetDate!]));
+  const today = todayIn(tz);
+  const paused = new Set(projects.filter((p) => isPaused(p, today)).map((p) => p.id));
   const input: PlanInput = {
     tz,
     now,
@@ -85,10 +122,13 @@ export async function loadInputs(user: User, horizonDays = HORIZON_DAYS): Promis
     weekly: hours.weekly,
     overrides: hours.overrides,
     busy: busyResult.busy,
-    tasks: tasks.map((t) => ({ id: t.id, title: t.title, estimateMinutes: remainingMinutes(t.estimateMinutes, t.progress), dueDate: t.dueDate ?? (t.projectId ? (projectTarget.get(t.projectId) ?? null) : null), hardDeadline: t.hardDeadline, priority: t.priority, energy: t.energy, status: t.status, kind: t.kind, position: t.position })),
+    // Work in a paused project waits until the project is active again.
+    tasks: tasks
+      .filter((t) => !t.projectId || !paused.has(t.projectId))
+      .map((t) => ({ id: t.id, title: t.title, estimateMinutes: remainingMinutes(t.estimateMinutes, t.progress), dueDate: t.dueDate ?? (t.projectId ? (projectTarget.get(t.projectId) ?? null) : null), hardDeadline: t.hardDeadline, priority: t.priority, energy: t.energy, status: t.status, kind: t.kind, position: t.position, projectId: t.projectId, categoryId: t.categoryId })),
     links,
     pinned: pinned.map((p) => ({ taskId: p.taskId, start: p.start.getTime(), end: p.end.getTime() })),
-    rules: notes.filter((n) => n.day).map((n) => ({ day: n.day!, avoidEnergy: n.avoidEnergy, skipTaskIds: n.skipTaskIds, reserveForTaskIds: n.reserveForTaskIds, maxWorkMinutes: n.maxWorkMinutes })),
+    rules: rulesFromNotes(notes, tz, now, horizonDays),
   };
   return { input, titles: new Map(tasks.map((t) => [t.id, t.title])), notes, calendarProblems: busyResult.problems };
 }

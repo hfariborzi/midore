@@ -85,6 +85,13 @@
       "when": 1792037843490,
       "tag": "0011_login_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793936295434,
+      "tag": "0012_dori_batch_one",
+      "breakpoints": true
     }
   ]
 }

@@ -213,7 +213,8 @@ export type TaskKind = "task" | "reminder"; // a reminder is something to rememb
 export type TaskStatus = "open" | "good_enough" | "done" | "dropped";
 export type TaskEnergy = "deep" | "light";
 export type TaskLinkKind = "before" | "together"; // "from" finishes before "to" starts; or the two are done as one
-export type TaskRepeat = "daily" | "weekdays" | "weekly" | "monthly";
+// "daily", "weekly", "days:1,3,5", "nth:-1:5", "times:3" …; the grammar is in src/lib/tasks/repeat.ts.
+export type TaskRepeat = string;
 
 /** A bounded effort inside an area, e.g. "JIBS revision" under Research. */
 export const projects = pgTable(
@@ -228,6 +229,7 @@ export const projects = pgTable(
     notes: text("notes").notNull().default(""),
     status: text("status").$type<ProjectStatus>().notNull().default("active"),
     targetDate: text("target_date"), // YYYY-MM-DD, optional
+    pausedUntil: text("paused_until"), // YYYY-MM-DD: a paused project counts as active again from this day
     position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -262,12 +264,15 @@ export const tasks = pgTable(
     energy: text("energy").$type<TaskEnergy>(), // null = either
     people: jsonb("people").$type<string[]>().notNull().default([]), // who is involved
     repeat: text("repeat").$type<TaskRepeat>(), // completing a repeating task creates the next one
+    seriesId: integer("series_id"), // the first occurrence of a repeating task; every later one points to it
+    remindAt: timestamp("remind_at", { withTimezone: true }), // when to alert ("remind me at 6"); null = no alert
+    deferCount: integer("defer_count").notNull().default(0), // times the due date was pushed later
     position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
-  (t) => [index("tasks_user_status_idx").on(t.userId, t.status), index("tasks_project_idx").on(t.projectId)],
+  (t) => [index("tasks_user_status_idx").on(t.userId, t.status), index("tasks_project_idx").on(t.projectId), index("tasks_remind_idx").on(t.remindAt)],
 );
 
 /** Ordering and grouping between tasks. */
@@ -342,6 +347,15 @@ export const dayNotes = pgTable(
     skipTaskIds: jsonb("skip_task_ids").$type<number[]>().notNull().default([]),
     reserveForTaskIds: jsonb("reserve_for_task_ids").$type<number[]>().notNull().default([]), // only these that day
     maxWorkMinutes: integer("max_work_minutes"),
+    weekday: integer("weekday"), // 1-7: a standing note for that weekday only (day must be null)
+    // With both set, avoid/skip/reserve apply only between these times ("Wednesday mornings for writing").
+    windowStart: text("window_start"), // HH:mm
+    windowEnd: text("window_end"), // HH:mm
+    startAfter: text("start_after"), // HH:mm: no planned work before this
+    endBy: text("end_by"), // HH:mm: no planned work after this
+    reserveForProjectIds: jsonb("reserve_for_project_ids").$type<number[]>().notNull().default([]),
+    reserveForAreaIds: jsonb("reserve_for_area_ids").$type<number[]>().notNull().default([]),
+    bufferMinutes: integer("buffer_minutes"), // keep this long free after each meeting
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("day_notes_user_day_idx").on(t.userId, t.day)],
@@ -372,7 +386,16 @@ export type DoriProposal = {
 };
 export type DoriCard =
   | { kind: "emails"; items: { label: string; href: string; count: number }[] }
-  | { kind: "event"; title: string; start: string; end: string; attendees: string[]; status: "pending" | "added" | "dismissed" }
+  | {
+      kind: "event"; title: string; start: string; end: string; attendees: string[]; status: "pending" | "added" | "dismissed";
+      onlineMeeting?: boolean; accountId?: number; calendarId?: string; calendarLabel?: string; location?: string; description?: string;
+      recurrence?: { freq: "daily" | "weekly" | "monthly" | "yearly"; interval?: number; byWeekday?: number[]; count?: number; until?: string }; repeatLabel?: string;
+    }
+  | {
+      kind: "event_change"; action: "move" | "delete"; title: string; accountId: number; calendarId: string; eventId: string;
+      start: string; end: string; newStart?: string; newEnd?: string; status: "pending" | "done" | "dismissed";
+    }
+  | { kind: "booking_cancel"; uid: string; title: string; who: string; start: string; end: string; reason: string; status: "pending" | "done" | "dismissed" }
   | { kind: "slots"; items: { start: string; end: string; shifts: string[] }[] };
 export type DoriMeta = {
   lang?: string;
@@ -412,7 +435,14 @@ export type UndoOp =
   | { op: "restoreNote"; row: Record<string, unknown> }
   | { op: "deletePinned"; id: number }
   | { op: "restorePinned"; row: Record<string, unknown> }
-  | { op: "setWorkHours"; weekly: WeeklyHours | null };
+  | { op: "setWorkHours"; weekly: WeeklyHours | null }
+  | { op: "restoreProject"; row: Record<string, unknown>; tasks: Record<string, unknown>[]; links: Record<string, unknown>[] }
+  | { op: "patchCategory"; id: number; fields: Record<string, unknown> }
+  | { op: "restoreCategory"; row: Record<string, unknown>; taskIds: number[]; projectIds: number[] }
+  | { op: "patchUser"; fields: { doriPrefs?: DoriPrefs | null; timezone?: string } }
+  | { op: "patchEventType"; id: number; fields: Record<string, unknown> }
+  | { op: "patchSchedule"; id: number; fields: Record<string, unknown> }
+  | { op: "deleteEventType"; id: number };
 
 export const doriActions = pgTable(
   "dori_actions",

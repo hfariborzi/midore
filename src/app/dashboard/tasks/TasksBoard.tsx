@@ -6,9 +6,12 @@ import type { Category, Priority, Project, Task, TaskLink, TaskStatus } from "@/
 import { PRIORITY_LABEL } from "@/lib/labels/core";
 import { Dori, type DoriMood } from "@/components/Dori";
 import { blockedTaskIds, compareTasks, dueLabel, formatEstimate, isComplete, progress } from "@/lib/tasks/core";
+import { repeatLabel } from "@/lib/tasks/repeat";
 import { OPEN_DORI, type OpenDoriDetail } from "../DoriPanel";
 import { addTaskLink, deleteProject, deleteTask, deleteTaskLink, promoteResidue, saveProject, saveTask, setTaskStatus, type TaskInput } from "../actions";
 import { GRAPHITE, toPalette } from "@/lib/palette";
+
+const SIMPLE_REPEATS = ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"];
 
 type View = { kind: "area"; id: number | null } | { kind: "all" } | { kind: "loose" } | { kind: "reminders" } | { kind: "completed" };
 
@@ -302,9 +305,11 @@ function TaskRow({ task, ...ctx }: Ctx & { task: Task }) {
             </form>
           )}
           {task.status === "good_enough" && task.residue && <p className="text-xs text-accent-soft">Left: {task.residue}</p>}
-          {(due || task.estimateMinutes || task.priority === "high" || blocked || after.length > 0 || together > 0 || task.kind === "reminder" || task.people.length > 0) && !done && (
+          {(due || task.estimateMinutes || task.priority === "high" || blocked || after.length > 0 || together > 0 || task.kind === "reminder" || task.people.length > 0 || task.remindAt || task.repeat) && !done && (
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-faint">
-              {task.kind === "reminder" && <span className="inline-flex items-center gap-1"><Bell size={11} /> reminder</span>}
+              {task.kind === "reminder" && !task.remindAt && <span className="inline-flex items-center gap-1"><Bell size={11} /> reminder</span>}
+              {task.remindAt && <span className="inline-flex items-center gap-1 tnum"><Bell size={11} /> {new Date(task.remindAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}
+              {task.repeat && <span>{repeatLabel(task.repeat)}</span>}
               {due && <span className={due.tone === "overdue" ? "text-danger" : due.tone === "soon" ? "text-warning" : ""}>{task.hardDeadline ? "Deadline " : "Due "}{due.text}</span>}
               {task.estimateMinutes ? <span className="tnum">{formatEstimate(task.estimateMinutes)}</span> : null}
               {task.priority === "high" && <span className="text-danger">High</span>}
@@ -427,6 +432,7 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
   const [d, setD] = useState<TaskInput>({
     id: task.id, projectId: task.projectId, categoryId: task.categoryId, title: task.title, notes: task.notes, kind: task.kind,
     estimateMinutes: task.estimateMinutes, dueDate: task.dueDate, hardDeadline: task.hardDeadline, priority: task.priority, energy: task.energy, people: task.people, repeat: task.repeat,
+    remindTime: task.remindAt ? new Date(task.remindAt).toTimeString().slice(0, 5) : null,
   });
   const [linkTo, setLinkTo] = useState("");
   const [linkKind, setLinkKind] = useState<"before" | "together">("before");
@@ -486,6 +492,11 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
           <input type="checkbox" checked={d.hardDeadline} onChange={(e) => upd({ hardDeadline: e.target.checked })} /> Hard deadline
         </label>
       </div>
+      <div>
+        <label className="label">Alert at</label>
+        <input type="time" className="input" value={d.remindTime ?? ""} onChange={(e) => upd({ remindTime: e.target.value || null })} />
+        <p className="help">{d.remindTime ? `On the due day${d.dueDate ? "" : " (today)"}` : "No alert"}</p>
+      </div>
       {d.kind === "task" && (
         <div>
           <label className="label">Estimate</label>
@@ -522,7 +533,10 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
           <option value="daily">Every day</option>
           <option value="weekdays">Every weekday</option>
           <option value="weekly">Every week</option>
+          <option value="biweekly">Every 2 weeks</option>
           <option value="monthly">Every month</option>
+          <option value="yearly">Every year</option>
+          {d.repeat && !SIMPLE_REPEATS.includes(d.repeat) && <option value={d.repeat}>{repeatLabel(d.repeat)}</option>}
         </select>
       </div>
       <div className="sm:col-span-2">

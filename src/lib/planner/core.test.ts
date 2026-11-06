@@ -102,3 +102,42 @@ test("moves are described only when work shifts by more than half an hour", () =
   const b = [{ taskId: 1, start: iv("2026-10-12T09:15", "10:00").start, end: 0, pinned: false }, { taskId: 2, start: iv("2026-10-13T09:00", "10:00").start, end: 0, pinned: false }];
   assert.deepEqual(describeMoves(a, b, new Map([[1, "Draft"], [2, "Review"]]), TZ), ['Moved "Review" from Mon 10:00 AM to Tue 9:00 AM']);
 });
+
+test("start after and end by trim the day", () => {
+  const out = plan(base({ tasks: [t(1, { estimateMinutes: 120 })], rules: [{ day: "2026-10-12", startAfter: "10:00", endBy: "11:00" }] }));
+  assert.deepEqual(out.blocks.map((b) => [local(b.start), local(b.end)]), [["Mon 10:00", "Mon 11:00"], ["Tue 09:00", "Tue 10:00"]]);
+});
+
+test("a windowed reservation keeps the morning for one project and lets other work have the afternoon", () => {
+  const out = plan(base({
+    tasks: [t(1, { estimateMinutes: 60, projectId: 7 }), t(2, { estimateMinutes: 60, dueDate: "2026-10-12" })],
+    rules: [{ day: "2026-10-12", window: { start: "09:00", end: "12:00" }, reserveForProjectIds: [7] }],
+  }));
+  assert.deepEqual(out.blocks.map((b) => [b.taskId, local(b.start)]), [[1, "Mon 09:00"], [2, "Mon 12:00"]]);
+});
+
+test("deep work only in the morning: avoid deep work in an afternoon window", () => {
+  const out = plan(base({
+    now: MON.set({ hour: 13 }).toMillis(),
+    tasks: [t(1, { energy: "deep" }), t(2, { energy: "light" })],
+    rules: ["2026-10-12", "2026-10-13"].map((day) => ({ day, window: { start: "12:00", end: "24:00" }, avoidEnergy: "deep" as const })),
+  }));
+  assert.deepEqual(out.blocks.map((b) => [b.taskId, local(b.start)]), [[2, "Mon 13:00"], [1, "Tue 09:00"]]);
+});
+
+test("two reservations on one day add up rather than block each other", () => {
+  const out = plan(base({ tasks: [t(1), t(2), t(3)], rules: [{ day: "2026-10-12", reserveForTaskIds: [1] }, { day: "2026-10-12", reserveForAreaIds: [4] }] }));
+  const monday = out.blocks.filter((b) => local(b.start).startsWith("Mon")).map((b) => b.taskId);
+  assert.deepEqual(monday, [1]);
+  const out2 = plan(base({ tasks: [t(1), t(2, { categoryId: 4 })], rules: [{ day: "2026-10-12", reserveForTaskIds: [1] }, { day: "2026-10-12", reserveForAreaIds: [4] }] }));
+  assert.deepEqual(out2.blocks.map((b) => [b.taskId, local(b.start)]), [[1, "Mon 09:00"], [2, "Mon 10:00"]]);
+});
+
+test("a buffer after meetings and a lunch window kept free", () => {
+  const out = plan(base({
+    busy: [iv("2026-10-12T09:00", "10:00")],
+    tasks: [t(1, { estimateMinutes: 180 })],
+    rules: [{ day: "2026-10-12", bufferMinutes: 15 }, { day: "2026-10-12", window: { start: "12:00", end: "13:00" }, maxWorkMinutes: 0 }],
+  }));
+  assert.deepEqual(out.blocks.map((b) => [local(b.start), local(b.end)]), [["Mon 10:15", "Mon 12:00"], ["Mon 13:00", "Mon 14:15"]]);
+});

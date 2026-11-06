@@ -4,6 +4,7 @@
  */
 import { DateTime } from "luxon";
 import type { Attendee, Interval } from "./types";
+export { toGraphRecurrence } from "./recurrence.ts";
 
 /** Tenant id Microsoft uses for personal (outlook.com, hotmail, live) accounts. */
 export const CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";

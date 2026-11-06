@@ -14,7 +14,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::api::{self, Item};
+use crate::api::{self, Alert, Item};
 use crate::session::{self, AppState};
 
 const TRAY: &str = "main";
@@ -138,7 +138,7 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
     }
     let agenda = app.state::<AppState>().agenda.lock().unwrap().clone();
     if let Some(agenda) = agenda {
-        notify(app, &agenda.items);
+        notify(app, &agenda.items, &agenda.alerts);
         update_tray(app, Some(&agenda));
     }
 }
@@ -156,7 +156,7 @@ async fn refresh<R: Runtime>(app: &AppHandle<R>) {
     }
     match api::agenda(&token).await {
         Ok(agenda) => {
-            notify(app, &agenda.items);
+            notify(app, &agenda.items, &agenda.alerts);
             if let Ok(json) = serde_json::to_value(&agenda) {
                 session::keep_agenda(app, &json);
             }
@@ -409,11 +409,19 @@ fn place_under<R: Runtime>(app: &AppHandle<R>, window: &tauri::WebviewWindow<R>,
     let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
-/// Planned work: a heads-up just before it starts, and "how did it go?" when it ends.
-fn notify<R: Runtime>(app: &AppHandle<R>, items: &[Item]) {
+/// Planned work: a heads-up just before it starts, and "how did it go?" when it ends. Alerts set on tasks and
+/// reminders fire at their time.
+fn notify<R: Runtime>(app: &AppHandle<R>, items: &[Item], alerts: &[Alert]) {
     let now = Local::now();
     let notified = app.state::<Notified>();
     let mut seen = notified.0.lock().unwrap();
+    for alert in alerts {
+        let Some(at) = parse(&alert.at) else { continue };
+        let since = (now - at).num_seconds();
+        if (0..=REFRESH_EVERY.as_secs() as i64 * 2).contains(&since) && seen.insert(alert.id.clone()) {
+            let _ = app.notification().builder().title(alert.title.clone()).body("Reminder from Midore").show();
+        }
+    }
     for item in items.iter().filter(|i| i.kind == "task" && i.state.as_deref() == Some("open")) {
         let (Some(start), Some(end)) = (parse(&item.start), parse(&item.end)) else { continue };
         let soon = (start - now).num_seconds();

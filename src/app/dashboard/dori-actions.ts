@@ -5,9 +5,10 @@ import { after } from "next/server";
 import { and, eq, gte } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { db, dayNotes, doriActions, doriMessages, pinnedBlocks, users, type DoriMeta, type User, type WeeklyHours } from "@/db";
+import { db, bookings, dayNotes, doriActions, doriMessages, pinnedBlocks, users, type DoriMeta, type User, type WeeklyHours } from "@/db";
 import { requireUser } from "@/lib/auth";
-import { listAccounts, providerFor, resolveWriteTarget } from "@/lib/calendar";
+import { cancelBooking } from "@/lib/bookings";
+import { isConnected, listAccounts, providerFor, resolveWriteTarget } from "@/lib/calendar";
 import { randomId } from "@/lib/crypto";
 import { applyProposal } from "@/lib/dori/proposal";
 import { undoMessage } from "@/lib/dori/undo";
@@ -130,15 +131,20 @@ export async function confirmDoriEvent(messageId: number, cardIndex: number): Pr
   cards[cardIndex] = { ...card, status: "added" };
   await setMeta(m.id, { ...m.meta, cards });
   try {
-    const target = resolveWriteTarget(user, await listAccounts(user.id));
+    const accounts = await listAccounts(user.id);
+    const chosen = accounts.find((a) => a.id === card.accountId && isConnected(a));
+    const target = chosen ? { account: chosen, calendarId: card.calendarId ?? "primary" } : resolveWriteTarget(user, accounts);
     await providerFor(target.account).createEvent(target.account, target.calendarId, {
       requestId: randomId(),
       summary: card.title,
+      description: card.description,
+      location: card.location,
       start: new Date(card.start),
       end: new Date(card.end),
       timeZone: user.timezone,
       attendees: card.attendees.map((email) => ({ email })),
-      onlineMeeting: false,
+      onlineMeeting: !!card.onlineMeeting && target.account.onlineMeetings,
+      recurrence: card.recurrence,
     });
   } catch (err) {
     logError("dori event", err);
@@ -154,10 +160,55 @@ export async function dismissDoriEvent(messageId: number, cardIndex: number): Pr
   const user = await requireUser();
   const m = await ownMessage(user.id, messageId);
   const card = m?.meta.cards?.[cardIndex];
-  if (!m || !card || card.kind !== "event") return {};
+  if (!m || !card || (card.kind !== "event" && card.kind !== "event_change" && card.kind !== "booking_cancel")) return {};
   const cards = [...(m.meta.cards ?? [])];
-  cards[cardIndex] = { ...card, status: "dismissed" };
+  cards[cardIndex] = { ...card, status: "dismissed" } as typeof card;
   await setMeta(m.id, { ...m.meta, cards });
+  return {};
+}
+
+/** Move or delete one of the user's own events, as Dori proposed. */
+export async function confirmDoriEventChange(messageId: number, cardIndex: number): Promise<Result> {
+  const user = await requireUser();
+  const m = await ownMessage(user.id, messageId);
+  const card = m?.meta.cards?.[cardIndex];
+  if (!m || !card || card.kind !== "event_change" || card.status !== "pending") return { error: "Nothing to change" };
+  const account = (await listAccounts(user.id)).find((a) => a.id === card.accountId);
+  if (!account || !isConnected(account)) return { error: "That calendar needs to be reconnected in Settings." };
+  try {
+    const provider = providerFor(account);
+    if (card.action === "delete") await provider.deleteEvent(account, card.calendarId, card.eventId);
+    else if (card.newStart && card.newEnd) await provider.moveEvent(account, card.calendarId, card.eventId, new Date(card.newStart), new Date(card.newEnd), user.timezone);
+  } catch (err) {
+    logError("dori event change", err);
+    return { error: card.action === "delete" ? "Couldn't delete it. Try again from your calendar app." : "Couldn't move it. Try again from your calendar app." };
+  }
+  const cards = [...(m.meta.cards ?? [])];
+  cards[cardIndex] = { ...card, status: "done" };
+  await setMeta(m.id, { ...m.meta, cards });
+  await planChanged(user);
+  return {};
+}
+
+/** Cancel a booking Dori proposed to cancel; the person is told, as when the host cancels from Bookings. */
+export async function confirmDoriBookingCancel(messageId: number, cardIndex: number): Promise<Result> {
+  const user = await requireUser();
+  const m = await ownMessage(user.id, messageId);
+  const card = m?.meta.cards?.[cardIndex];
+  if (!m || !card || card.kind !== "booking_cancel" || card.status !== "pending") return { error: "Nothing to cancel" };
+  const [b] = await db.select({ userId: bookings.userId }).from(bookings).where(eq(bookings.uid, card.uid)).limit(1);
+  if (!b || b.userId !== user.id) return { error: "Booking not found" };
+  try {
+    await cancelBooking(card.uid, "host", card.reason);
+  } catch (err) {
+    logError("dori booking cancel", err);
+    return { error: "Couldn't cancel it. Try again from Bookings." };
+  }
+  const cards = [...(m.meta.cards ?? [])];
+  cards[cardIndex] = { ...card, status: "done" };
+  await setMeta(m.id, { ...m.meta, cards });
+  await planChanged(user);
+  revalidatePath("/dashboard/bookings");
   return {};
 }
 

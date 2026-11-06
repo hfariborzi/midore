@@ -16,7 +16,10 @@ const MAX_ROUNDS = 6;
 const HISTORY = 10;
 // Tools whose results Dori needs to read before answering. For the others, a reply written alongside the
 // calls can be used as is when every call succeeds, which saves a whole model round.
-const READ_TOOLS = new Set(["get_plan", "find_meeting_times", "check_capacity", "list_meetings", "propose_plan", "draft_emails", "propose_calendar_event"]);
+const READ_TOOLS = new Set([
+  "get_plan", "find_meeting_times", "check_capacity", "list_meetings", "propose_plan", "draft_emails", "propose_calendar_event",
+  "propose_event_change", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking",
+]);
 
 export type DoriEvent =
   | { type: "status"; mood: DoriMood; text: string }

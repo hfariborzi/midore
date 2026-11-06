@@ -88,9 +88,21 @@ pub struct Item {
     pub state: Option<String>,
 }
 
+/// An alert the person set on a task or reminder ("remind me at 6").
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    pub id: String,
+    pub task_id: i64,
+    pub title: String,
+    pub at: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Agenda {
     pub items: Vec<Item>,
+    #[serde(default)]
+    pub alerts: Vec<Alert>,
     pub now: Option<Item>,
     pub next: Option<Item>,
 }

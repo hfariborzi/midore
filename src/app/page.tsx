@@ -41,7 +41,7 @@ const TRUST = [
 ];
 
 const FAQ = [
-  ["Will it move my meetings?", "No. Midore never moves or deletes your events. It only places your own plans in the free time, and you can pin anything where you want it."],
+  ["Will it move my meetings?", "No. Midore never moves or deletes your events on its own. It only places your own plans in the free time, and you can pin anything where you want it. If you ask Dori to move one of your own events, she shows you the change first."],
   ["Is it only for work?", "No. Workouts, friends, chores and rest go on the same week as your work, and Dori can suggest what to do with a free afternoon."],
   ["Do I have to use the AI?", "No. Booking, tasks and the planner work without it. Dori stays off until you turn her on."],
   [

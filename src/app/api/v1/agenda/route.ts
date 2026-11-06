@@ -4,12 +4,14 @@ import { eventsForAccounts, listAccounts } from "@/lib/calendar";
 import { eventKey, labelEvents } from "@/lib/labels";
 import { GRAPHITE, toPalette } from "@/lib/palette";
 import { blockState, planBlocks } from "@/lib/plan-view";
+import { upcomingAlerts } from "@/lib/tasks";
 
 export const maxDuration = 30;
 
 /**
  * Today (or the next few days, or another day with `date`) for the tray, the menu bar and the widgets: events and planned work in one list,
- * coloured with the Midore palette by category, plus what is happening now and what comes next.
+ * coloured with the Midore palette by category, plus what is happening now and what comes next, and the alerts set on
+ * tasks and reminders.
  */
 export async function GET(req: Request) {
   return withDevice(req, "agenda", async (user) => {
@@ -20,9 +22,11 @@ export async function GET(req: Request) {
     const picked = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? DateTime.fromISO(date, { zone: user.timezone }) : null;
     const start = (picked?.isValid ? picked : DateTime.now().setZone(user.timezone)).startOf("day");
     const end = start.plus({ days });
-    const [{ events, problems }, blocks] = await Promise.all([
+    const [{ events, problems }, blocks, alerts] = await Promise.all([
       listAccounts(user.id).then((accounts) => eventsForAccounts(user, accounts, start.toJSDate(), end.toJSDate())),
       planBlocks(user, start.toMillis(), end.toMillis()),
+      // Alerts the user asked for ("remind me at 6"), from now on: the apps schedule them as notifications.
+      upcomingAlerts(user, new Date(Math.max(Date.now() - 10 * 60_000, start.toMillis())), end.toJSDate()),
     ]);
     const { labels, categories } = await labelEvents(user.id, events);
     const catColor = (id: number | null | undefined) => {
@@ -68,6 +72,7 @@ export async function GET(req: Request) {
       start: start.toISO(),
       end: end.toISO(),
       items,
+      alerts: alerts.map((a) => ({ id: `alert:${a.taskId}:${a.at}`, taskId: a.taskId, title: a.title, at: a.at })),
       now: current,
       next,
       problems: problems.map((p) => ({ email: p.email, message: p.message })),

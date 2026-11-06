@@ -6,6 +6,7 @@
 import { DateTime } from "luxon";
 import type { DateOverride, Priority, TaskEnergy, TaskLink, TaskStatus, WeeklyHours } from "@/db/schema";
 import type { Interval } from "../calendar/types";
+import { nextDueFor } from "../tasks/repeat.ts";
 
 export const HORIZON_DAYS = 14;
 export const DEFAULT_ESTIMATE = 30; // minutes, for tasks without one
@@ -24,6 +25,8 @@ export type PlanTask = {
   status: TaskStatus;
   kind: "task" | "reminder";
   position: number;
+  projectId?: number | null;
+  categoryId?: number | null;
 };
 
 export type DayRule = {
@@ -31,7 +34,13 @@ export type DayRule = {
   avoidEnergy?: TaskEnergy | null;
   skipTaskIds?: number[];
   reserveForTaskIds?: number[];
+  reserveForProjectIds?: number[];
+  reserveForAreaIds?: number[];
   maxWorkMinutes?: number | null;
+  window?: { start: string; end: string } | null; // HH:mm; avoid, skip and reserve apply only inside it
+  startAfter?: string | null; // HH:mm: nothing planned before
+  endBy?: string | null; // HH:mm: nothing planned after
+  bufferMinutes?: number | null; // kept free after each meeting that ends this day
 };
 
 export type PlanInput = {
@@ -111,23 +120,85 @@ function compare(a: PlanTask, b: PlanTask): number {
   return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.position - b.position || a.id - b.id;
 }
 
+/** Meetings take their buffer with them: busy time ends later on days with a buffer rule. */
+function padBusy(input: PlanInput): PlanInput {
+  const buffer = new Map<string, number>();
+  for (const r of input.rules) if (r.bufferMinutes) buffer.set(r.day, Math.max(buffer.get(r.day) ?? 0, r.bufferMinutes));
+  if (!buffer.size) return input;
+  const busy = input.busy.map((b) => {
+    const pad = buffer.get(DateTime.fromMillis(b.end, { zone: input.tz }).toISODate()!) ?? 0;
+    return pad ? { start: b.start, end: b.end + pad * 60_000 } : b;
+  });
+  return { ...input, busy };
+}
+
+/** Drop free time before a day's "start after" and after its "end by". */
+function trimDays(free: Free[], rules: DayRule[], tz: string): Free[] {
+  let out = free;
+  for (const r of rules) {
+    if (!r.startAfter && !r.endBy) continue;
+    const date = DateTime.fromISO(r.day, { zone: tz });
+    const cuts: Interval[] = [];
+    if (r.startAfter) cuts.push({ start: date.startOf("day").toMillis(), end: at(date, r.startAfter).toMillis() });
+    if (r.endBy) cuts.push({ start: at(date, r.endBy).toMillis(), end: date.endOf("day").toMillis() + 1 });
+    out = out.flatMap((f) => {
+      if (f.day !== r.day) return [f];
+      let pieces: Interval[] = [f];
+      for (const c of cuts) pieces = subtract(pieces, c);
+      return pieces.filter((p) => p.end - p.start >= STEP_MS).map((p) => ({ day: f.day, ...p }));
+    });
+  }
+  return out;
+}
+
+/** Split free windows at the edges of windowed rules, so each piece is wholly inside or outside every window. */
+function splitAtWindows(free: Free[], rules: DayRule[], tz: string): Free[] {
+  const edges = new Map<string, number[]>();
+  for (const r of rules) {
+    if (!r.window) continue;
+    const date = DateTime.fromISO(r.day, { zone: tz });
+    edges.set(r.day, [...(edges.get(r.day) ?? []), at(date, r.window.start).toMillis(), at(date, r.window.end).toMillis()]);
+  }
+  return free.flatMap((f) => {
+    const cuts = (edges.get(f.day) ?? []).filter((e) => e > f.start && e < f.end).sort((a, b) => a - b);
+    const out: Free[] = [];
+    let s = f.start;
+    for (const c of [...cuts, f.end]) {
+      if (c > s) out.push({ day: f.day, start: s, end: c });
+      s = c;
+    }
+    return out;
+  });
+}
+
 export function plan(input: PlanInput): PlanOutput {
   const { tz } = input;
   const tasks = input.tasks.filter((t) => isOpen(t.status) && t.kind === "task");
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const rules = new Map<string, DayRule>();
-  for (const r of input.rules) {
-    const prev = rules.get(r.day);
-    rules.set(r.day, {
-      day: r.day,
-      avoidEnergy: r.avoidEnergy ?? prev?.avoidEnergy ?? null,
-      skipTaskIds: [...(prev?.skipTaskIds ?? []), ...(r.skipTaskIds ?? [])],
-      reserveForTaskIds: [...(prev?.reserveForTaskIds ?? []), ...(r.reserveForTaskIds ?? [])],
-      maxWorkMinutes: r.maxWorkMinutes ?? prev?.maxWorkMinutes ?? null,
-    });
-  }
+  const rules = new Map<string, DayRule[]>();
+  for (const r of input.rules) rules.set(r.day, [...(rules.get(r.day) ?? []), r]);
+  // A cap in a windowed note is about the window (0 = keep it free), not the whole day.
+  const dayCap = (day: string) => {
+    const caps = (rules.get(day) ?? []).filter((r) => !r.window).map((r) => r.maxWorkMinutes).filter((m): m is number => m != null);
+    return caps.length ? Math.min(...caps) : Infinity;
+  };
+  const inWindow = (f: Free, r: DayRule) => {
+    if (!r.window) return true;
+    const date = DateTime.fromMillis(f.start, { zone: tz }).startOf("day");
+    return f.start >= at(date, r.window.start).toMillis() && f.end <= at(date, r.window.end).toMillis();
+  };
+  const reserved = (r: DayRule) => !!(r.reserveForTaskIds?.length || r.reserveForProjectIds?.length || r.reserveForAreaIds?.length);
+  const covers = (r: DayRule, task: PlanTask) =>
+    !!(r.reserveForTaskIds?.includes(task.id) || (task.projectId != null && r.reserveForProjectIds?.includes(task.projectId)) || (task.categoryId != null && r.reserveForAreaIds?.includes(task.categoryId)));
+  // Skips and energy rules always hold; when time is reserved, a task fits if any reservation covers it.
+  const allowed = (task: PlanTask, f: Free) => {
+    const here = (rules.get(f.day) ?? []).filter((r) => inWindow(f, r));
+    if (here.some((r) => (r.window && r.maxWorkMinutes === 0) || r.skipTaskIds?.includes(task.id) || (r.avoidEnergy && task.energy === r.avoidEnergy))) return false;
+    const reservations = here.filter(reserved);
+    return !reservations.length || reservations.some((r) => covers(r, task));
+  };
 
-  const free = freeTime(input);
+  const free = splitAtWindows(trimDays(freeTime(padBusy(input)), input.rules, tz), input.rules, tz);
   const usedPerDay = new Map<string, number>(); // planned minutes per day, for maxWorkMinutes
   const blocks: Block[] = input.pinned.filter((p) => p.end > input.now).map((p) => ({ ...p, pinned: true }));
   const finish = new Map<number, number>(); // when each task's last block ends
@@ -167,11 +238,8 @@ export function plan(input: PlanInput): PlanOutput {
       for (let i = 0; i < free.length; i++) {
         const f = free[i];
         if (f.end <= earliest) continue;
-        const rule = rules.get(f.day);
-        if (rule?.skipTaskIds?.includes(task.id)) continue;
-        if (rule?.avoidEnergy && task.energy === rule.avoidEnergy) continue;
-        if (rule?.reserveForTaskIds?.length && !rule.reserveForTaskIds.includes(task.id)) continue;
-        const dayRoom = rule?.maxWorkMinutes != null ? rule.maxWorkMinutes - (usedPerDay.get(f.day) ?? 0) : Infinity;
+        if (!allowed(task, f)) continue;
+        const dayRoom = dayCap(f.day) - (usedPerDay.get(f.day) ?? 0);
         const s0 = Math.max(f.start, earliest);
         const room = Math.min((f.end - s0) / 60_000, dayRoom);
         const chunk = Math.min(remaining, room, MAX_CHUNK);
@@ -210,7 +278,7 @@ export function plan(input: PlanInput): PlanOutput {
 /** Working minutes still free before a date (end of that day), after the plan's own blocks. */
 export function freeMinutesUntil(input: PlanInput, out: PlanOutput, untilDay: string): number {
   const limit = endOfDay(untilDay, input.tz);
-  let windows = freeTime(input).filter((f) => f.start < limit).map((f) => ({ start: f.start, end: Math.min(f.end, limit) }));
+  let windows = trimDays(freeTime(padBusy(input)), input.rules, input.tz).filter((f) => f.start < limit).map((f) => ({ start: f.start, end: Math.min(f.end, limit) }));
   for (const b of out.blocks) windows = subtract(windows, b);
   return Math.round(windows.reduce((m, w) => m + (w.end - w.start), 0) / 60_000);
 }
@@ -256,17 +324,9 @@ export function meetingSlots(
   return picked.sort((a, b) => a.start - b.start);
 }
 
-/** Next due date for a repeating task, from its last due date (or today when it had none). */
-export function nextDue(repeat: "daily" | "weekdays" | "weekly" | "monthly", fromDay: string, tz: string): string {
-  let d = DateTime.fromISO(fromDay, { zone: tz });
-  if (repeat === "daily") d = d.plus({ days: 1 });
-  else if (repeat === "weekly") d = d.plus({ weeks: 1 });
-  else if (repeat === "monthly") d = d.plus({ months: 1 });
-  else {
-    d = d.plus({ days: 1 });
-    while (d.weekday > 5) d = d.plus({ days: 1 });
-  }
-  return d.toISODate()!;
+/** Next due date for a repeating task, from its last due date (or today when it had none). See tasks/repeat.ts. */
+export function nextDue(repeat: string, fromDay: string, tz: string, doneThisWeek = 0): string {
+  return nextDueFor(repeat, fromDay, tz, doneThisWeek);
 }
 
 /**

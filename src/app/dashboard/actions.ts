@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { and, eq, ne } from "drizzle-orm";
+import { DateTime } from "luxon";
 import { z } from "zod";
 import { db, users, schedules, eventTypes, bookings, calendarAccounts, categories, labelRules, eventLabels, projects, tasks, taskLinks, loginIdentities, type CalendarPrefs, type Priority } from "@/db";
 import { appleRevoke } from "@/lib/apple";
@@ -18,7 +19,8 @@ import { RESERVED_USERNAMES } from "@/lib/config";
 import { decrypt } from "@/lib/crypto";
 import { logError } from "@/lib/log";
 import { SESSION_COOKIE } from "@/lib/session";
-import { MAX_LINKS_PER_TASK, MAX_PROJECTS, MAX_TASKS, getProject, getTask, listLinks, listProjects, listTasks, ownedTasks, wouldCycle } from "@/lib/tasks";
+import { MAX_LINKS_PER_TASK, MAX_PROJECTS, MAX_TASKS, deferred, getProject, getTask, listLinks, listProjects, listTasks, ownedTasks, wouldCycle } from "@/lib/tasks";
+import { isRepeat } from "@/lib/tasks/repeat";
 import { markPlanDirty, replan } from "@/lib/planner";
 import { setStatusFor } from "@/lib/task-ops";
 import { revokeDevice } from "@/lib/native";
@@ -545,7 +547,8 @@ const taskSchema = z.object({
   priority: prioritySchema.default("normal"),
   energy: z.enum(["deep", "light"]).nullable().default(null),
   people: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
-  repeat: z.enum(["daily", "weekdays", "weekly", "monthly"]).nullable().default(null),
+  repeat: z.string().refine(isRepeat, "Unknown repeat").nullable().default(null),
+  remindTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(), // HH:mm on the due day (today when none); null = no alert
 });
 
 export type TaskInput = z.input<typeof taskSchema>;
@@ -554,7 +557,17 @@ export async function saveTask(input: TaskInput): Promise<ActionResult> {
   const user = await requireUser();
   const parsed = taskSchema.safeParse(input);
   if (!parsed.success) return { error: firstIssue(parsed.error) };
-  const { id, ...data } = parsed.data;
+  const { id, remindTime, ...fields } = parsed.data;
+  const data: typeof fields & { remindAt?: Date | null } = fields;
+  if (remindTime !== undefined) {
+    if (remindTime === null) data.remindAt = null;
+    else {
+      const today = DateTime.now().setZone(user.timezone).toISODate()!;
+      const day = data.dueDate ?? today;
+      if (!data.dueDate) data.dueDate = today;
+      data.remindAt = DateTime.fromISO(`${day}T${remindTime}`, { zone: user.timezone }).toJSDate();
+    }
+  }
   if (data.projectId !== null) {
     const project = await getProject(user.id, data.projectId);
     if (!project) return { error: "Unknown project" };
@@ -564,8 +577,10 @@ export async function saveTask(input: TaskInput): Promise<ActionResult> {
   }
   if (data.kind === "reminder") data.estimateMinutes = null;
   if (id) {
-    if (!(await getTask(user.id, id))) return { error: "Task not found" };
-    await db.update(tasks).set({ ...data, updatedAt: new Date() }).where(and(eq(tasks.id, id), eq(tasks.userId, user.id)));
+    const current = await getTask(user.id, id);
+    if (!current) return { error: "Task not found" };
+    const deferCount = current.deferCount + (deferred(current.dueDate, data.dueDate) ? 1 : 0);
+    await db.update(tasks).set({ ...data, deferCount, updatedAt: new Date() }).where(and(eq(tasks.id, id), eq(tasks.userId, user.id)));
     await planChanged(user);
     revalidatePath("/dashboard/tasks");
     return { id };

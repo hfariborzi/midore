@@ -68,3 +68,16 @@ test("dead grants are recognised by error type or AADSTS code", () => {
   assert.ok(!isDeadGrant({ error: "temporarily_unavailable" }));
   assert.ok(!isDeadGrant(undefined));
 });
+
+test("recurrences become Graph patterns and RRULEs", async () => {
+  const { toGraphRecurrence } = await import("./microsoft-graph.ts");
+  const { toRRule } = await import("./recurrence.ts");
+  const start = new Date("2026-11-09T15:00:00Z"); // Monday 10 am in Toronto
+  assert.deepEqual(toGraphRecurrence({ freq: "weekly" }, start, "America/Toronto"), {
+    pattern: { type: "weekly", interval: 1, daysOfWeek: ["monday"], firstDayOfWeek: "monday" },
+    range: { type: "noEnd", startDate: "2026-11-09" },
+  });
+  assert.deepEqual(toGraphRecurrence({ freq: "monthly", count: 6 }, start, "America/Toronto").range, { type: "numbered", startDate: "2026-11-09", numberOfOccurrences: 6 });
+  assert.equal(toRRule({ freq: "weekly", interval: 2, byWeekday: [2, 4] }), "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH");
+  assert.equal(toRRule({ freq: "daily", until: "2026-12-01" }), "RRULE:FREQ=DAILY;UNTIL=20261201T235959Z");
+});

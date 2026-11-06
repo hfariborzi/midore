@@ -82,6 +82,9 @@ export function progress(tasks: Pick<Task, "status" | "kind">[]): { done: number
   return { done: real.filter((t) => isComplete(t.status)).length, total: real.length };
 }
 
+/** A due date pushed later (counted, so "which tasks keep getting pushed?" has an answer). */
+export const deferred = (from: string | null, to: string | null | undefined) => !!(from && to && to > from);
+
 /** Days until a YYYY-MM-DD date, in the user's time zone (negative when past). */
 export function daysUntil(dateIso: string, todayIso: string): number {
   const d = Date.UTC(+dateIso.slice(0, 4), +dateIso.slice(5, 7) - 1, +dateIso.slice(8, 10));

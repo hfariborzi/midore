@@ -17,6 +17,7 @@ import {
   parseGraphUtc,
   toGraphAttendees,
   toGraphDateTime,
+  toGraphRecurrence,
   type GraphAttendee,
   type GraphDateTime,
   type GraphEventLite,
@@ -321,6 +322,7 @@ export const microsoftCalendar: CalendarProvider = {
       attendees: toGraphAttendees(ev.attendees.map((a) => ({ email: a.email, name: a.displayName }))),
       allowNewTimeProposals: false,
       transactionId: ev.requestId, // Graph de-duplicates retries with the same id
+      ...(ev.recurrence ? { recurrence: toGraphRecurrence(ev.recurrence, ev.start, ev.timeZone) } : {}),
     };
     const withTeams = ev.onlineMeeting && account.onlineMeetings;
     const path = `${calendarPath(calendarId)}/events`;

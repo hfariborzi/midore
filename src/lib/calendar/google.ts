@@ -16,6 +16,7 @@ import {
   type NewEvent,
   type ProviderIdentity,
 } from "./types";
+import { toRRule } from "./recurrence";
 
 // The narrowest Calendar scopes that cover what the app does (Google verification asks for minimal scopes).
 export const GOOGLE_CALENDAR_SCOPES = [
@@ -225,6 +226,7 @@ export const googleCalendar: CalendarProvider = {
           attendees: ev.attendees,
           guestsCanModify: false,
           extendedProperties: ev.privateProps ? { private: ev.privateProps } : undefined,
+          recurrence: ev.recurrence ? [toRRule(ev.recurrence)] : undefined,
           conferenceData: ev.onlineMeeting
             ? { createRequest: { requestId: ev.requestId, conferenceSolutionKey: { type: "hangoutsMeet" } } }
             : undefined,

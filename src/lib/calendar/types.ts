@@ -1,4 +1,5 @@
 import type { CalendarAccount, Provider } from "@/db/schema";
+import type { Recurrence } from "./recurrence";
 
 /** Thrown when an account's access was revoked or expired. The user has to reconnect it in Settings. */
 export class CalendarNotConnectedError extends Error {
@@ -50,7 +51,10 @@ export type NewEvent = {
   attendees: { email: string; displayName?: string }[];
   onlineMeeting: boolean; // attach a Google Meet / Microsoft Teams link
   privateProps?: Record<string, string>;
+  recurrence?: Recurrence;
 };
+
+export type { Recurrence } from "./recurrence";
 
 export type CreatedEvent = { id: string; meetLink: string | null; htmlLink: string | null };
 

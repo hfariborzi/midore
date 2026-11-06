@@ -19,7 +19,7 @@ export const metadata = {
   description: `How ${APP_NAME} collects, uses, shares, protects and deletes your data, including Google user data.`,
 };
 
-const UPDATED = "October 14, 2026";
+const UPDATED = "November 5, 2026";
 
 export default function PrivacyPage() {
   return (
@@ -140,15 +140,19 @@ export default function PrivacyPage() {
             (titles, notes, dates, estimates, priorities and the names of people you typed); notes she keeps for
             you, such as &ldquo;not in the mood for writing today&rdquo;; your working hours and planned work; and,
             from your calendars for the coming week (or a range you ask about), each event&apos;s title, start and
-            end time, calendar name and number of attendees. Attendee names and email addresses, event
-            descriptions and locations are never sent.{DORI_MODEL ? ` The model currently used is ${DORI_MODEL}.` : ""}{" "}
+            end time, calendar name and number of attendees; your booking pages (title, lengths, link) and booking
+            hours; and, when you ask about bookings, each booking&apos;s page, time and number of guests. Attendee and
+            booker names and email addresses, answers to booking questions, event descriptions and locations are
+            never sent.{DORI_MODEL ? ` The model currently used is ${DORI_MODEL}.` : ""}{" "}
             The same no-training and zero-data-retention setup described above for AI categorisation applies, and
             requests are subject to daily limits per user and for the whole service.
           </p>
           <p>
-            Dori can add, change, complete and remove your tasks and projects, and every change she makes can be
-            undone. She never moves or deletes calendar events. She can offer to add an event to your calendar,
-            which happens only when you press <strong>Add to calendar</strong>, and she can prepare emails, which
+            Dori can add, change, complete and remove your tasks, projects and areas, set reminders, and change your
+            booking pages and booking hours; every one of these changes can be undone. She never changes your
+            calendar or anyone&apos;s booking on her own: she can offer to add an event, to move or delete one of
+            your own events that has no other guests, or to cancel a booking, and each happens only when you press
+            its button. She can also prepare emails, which
             open in your own mail app with the recipients filled in by {APP_NAME} in your browser; {APP_NAME} never
             sends them. Your conversation with Dori is stored in {APP_NAME} until you clear it or turn Dori off,
             which also deletes the notes she kept.
