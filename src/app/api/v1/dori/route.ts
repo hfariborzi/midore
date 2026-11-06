@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { requestPlace } from "@/lib/request-place";
 import { json, withDevice } from "@/lib/api-v1";
 import { runTurn, type DoriEvent } from "@/lib/dori/agent";
 import { rateLimitKey } from "@/lib/rate-limit";
@@ -16,7 +17,7 @@ export async function POST(req: Request) {
     await rateLimitKey(`dori:${user.id}`, 20, 60);
     let reply: Extract<DoriEvent, { type: "reply" }> | null = null;
     let error: string | null = null;
-    await runTurn(user, { text: parsed.data.text, mode: "chat" }, (e) => {
+    await runTurn(user, { text: parsed.data.text, mode: "chat", near: requestPlace(req.headers) }, (e) => {
       if (e.type === "reply") reply = e;
       if (e.type === "error") error = e.text;
     });

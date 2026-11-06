@@ -6,9 +6,10 @@
 import { eq } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { db, places as placesTable, type Place } from "@/db";
+import { db, places as placesTable, users, type Place, type WeatherPlace } from "@/db";
 import type { ToolDef } from "../ai/client";
 import { appleConfigured, geocode, travelTime, type Coord, type TravelMode } from "../apple-services";
+import { fitsZone, zoneCity } from "../request-place";
 import { forecast, WEATHER_CREDIT } from "../weather";
 import type { ToolContext } from "./tools";
 
@@ -25,8 +26,9 @@ const S = {
 
 export const WORLD_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "weather", description: "The forecast: daily highs, lows, sky and rain for up to 10 days, and hour by hour for the next two days. For a saved place (default Home) or any city or address.", parameters: S.obj({
-    place: S.str("A saved place's name, or a city or address; leave out for Home"),
+    place: S.str("A saved place's name, or a city or address; leave out for Home (or the city you know them by)"),
     day: S.str("YYYY-MM-DD: the day asked about (hourly detail if within two days)"),
+    remember: { type: "boolean", description: "true when the user says this is where they live or are based: use it for the weather from now on" },
   }) } },
   { type: "function", function: { name: "travel_time", description: "How long it takes to get somewhere (driving with traffic, walking or transit) and when to leave. To: an event's location (event_ref), a saved place, or an address. From: a saved place (default Home) or an address.", parameters: S.obj({
     to: S.str("A saved place's name or an address"),
@@ -71,6 +73,28 @@ async function resolve(list: Place[], text: string | undefined, near?: Coord): P
   return found ? { ...found, saved: false } : `Error: couldn't find "${text}" on the map. Ask for a fuller address.`;
 }
 
+/**
+ * Dori's guess at the user's city for the weather: the city their connection comes from if it fits their time
+ * zone, otherwise the time zone's own city. Kept in their settings (rounded to about a kilometre) with the zone,
+ * so the guess holds until the time zone changes.
+ */
+async function guessCity(ctx: ToolContext, zone: string): Promise<WeatherPlace | null> {
+  const n = ctx.near;
+  let guess: WeatherPlace | null = null;
+  if (n?.city && n.lat != null && n.lng != null && fitsZone(n.lng, zone)) guess = { name: n.city, lat: n.lat, lng: n.lng, tz: zone };
+  else {
+    const city = zoneCity(zone);
+    const found = city && appleConfigured() ? await geocode(city).catch(() => null) : null;
+    if (found) guess = { name: found.label.split(",")[0], lat: found.lat, lng: found.lng, tz: zone };
+  }
+  if (!guess) return null;
+  guess = { ...guess, name: guess.name.slice(0, 80), lat: Math.round(guess.lat * 100) / 100, lng: Math.round(guess.lng * 100) / 100 };
+  const doriPrefs = { nickname: "", ...ctx.user.doriPrefs, weatherGuess: guess };
+  await db.update(users).set({ doriPrefs }).where(eq(users.id, ctx.user.id));
+  ctx.user = { ...ctx.user, doriPrefs };
+  return guess;
+}
+
 function credit(ctx: ToolContext, c: { text: string; href: string }) {
   ctx.credits ??= [];
   if (!ctx.credits.some((x) => x.href === c.href)) ctx.credits.push({ ...c });
@@ -78,12 +102,43 @@ function credit(ctx: ToolContext, c: { text: string; href: string }) {
 
 export const worldExecutors: Record<string, Exec> = {
   async weather(ctx, raw) {
-    const a = z.object({ place: opt(z.string().trim().max(200)), day: opt(day) }).parse(raw);
+    const a = z.object({ place: opt(z.string().trim().max(200)), day: opt(day), remember: opt(z.boolean()) }).parse(raw);
     const tz = ctx.user.timezone;
     const list = await savedPlaces(ctx.user.id);
-    const home = byName(list, "home");
-    const where = await resolve(list, a.place, home ? { lat: home.lat, lng: home.lng } : undefined);
+    const home = byName(list, "home") ?? (list.length === 1 ? list[0] : undefined);
+    const prefs = ctx.user.doriPrefs;
+    const zone = ctx.near?.tz ?? ctx.user.timezone;
+    const said = prefs?.weatherPlace && (!prefs.weatherPlace.tz || prefs.weatherPlace.tz === zone) ? prefs.weatherPlace : null;
+    // Where, in order: the place named, saved Home, the city they said they live in (while their time zone hasn't
+    // changed), then Dori's guess from their time zone and connection, kept until the time zone changes.
+    let where: Awaited<ReturnType<typeof resolve>>;
+    let source = "";
+    if (a.place) {
+      const hint = home ?? said ?? prefs?.weatherGuess ?? (ctx.near?.lat != null ? { lat: ctx.near.lat, lng: ctx.near.lng! } : undefined);
+      where = await resolve(list, a.place, hint ? { lat: hint.lat, lng: hint.lng } : undefined);
+      source = "the place asked about";
+    } else if (home) {
+      where = { lat: home.lat, lng: home.lng, label: home.name, saved: true };
+      source = "saved place";
+    } else if (said) {
+      where = { lat: said.lat, lng: said.lng, label: said.name, saved: false };
+      source = "the city they told you they live in";
+    } else {
+      const guess = prefs?.weatherGuess?.tz === zone ? prefs.weatherGuess : await guessCity(ctx, zone);
+      if (guess) {
+        where = { lat: guess.lat, lng: guess.lng, label: guess.name, saved: false };
+        source = `assumed: start the answer with "I'm assuming you're in ${guess.name}" and offer to use their real city (weather with place and remember: true)`;
+      } else where = "Error: no saved Home and no way to tell their city. Ask which city.";
+    }
     if (typeof where === "string") return where;
+    if (a.remember && a.place && !where.saved) {
+      const next = { nickname: "", ...ctx.user.doriPrefs };
+      const weatherPlace = { name: where.label.split(",")[0].slice(0, 80), lat: Math.round(where.lat * 100) / 100, lng: Math.round(where.lng * 100) / 100, tz: zone };
+      ctx.undo.push({ op: "patchUser", fields: { doriPrefs: ctx.user.doriPrefs ?? null } });
+      await db.update(users).set({ doriPrefs: { ...next, weatherPlace } }).where(eq(users.id, ctx.user.id));
+      ctx.user = { ...ctx.user, doriPrefs: { ...next, weatherPlace } };
+      ctx.actions.push(`Weather: ${weatherPlace.name} from now on`);
+    }
     const f = await forecast(where, tz);
     if (!f) return "Error: the weather service didn't answer; try again in a bit.";
     credit(ctx, WEATHER_CREDIT[f.source]);
@@ -93,6 +148,7 @@ export const worldExecutors: Record<string, Exec> = {
     if (a.day && !days.some((d) => d.date === a.day)) return JSON.stringify({ place: where.label, note: `No forecast for ${a.day} yet (forecasts reach ${days.at(-1)?.date ?? "a few days"}).`, days });
     return JSON.stringify({
       place: where.label,
+      place_source: source,
       units: "°C, mm of rain, km/h",
       days,
       ...(hours.length ? { hours: hours.map(({ rainChance, ...h }) => ({ ...h, ...(rainChance == null ? {} : { rainChance }), at: h.at.slice(11, 16), day: h.at.slice(0, 10) })) } : {}),

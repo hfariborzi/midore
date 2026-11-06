@@ -3,6 +3,7 @@
  * same rules as the UI, and records how to undo what it did. Anything that touches someone else or the
  * calendar (an email, a new event) becomes a card the user confirms; Dori never sends or books on her own.
  */
+import type { NearPlace } from "../request-place";
 import { and, eq, inArray } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
@@ -35,6 +36,7 @@ export type ToolContext = {
   concerned: boolean; // a deadline or capacity warning came up
   bookingRefs?: Map<string, string>; // "b1" → booking uid, for this turn
   credits?: { text: string; href: string }[]; // sources to credit under the reply (weather, maps)
+  near?: NearPlace; // roughly where the request came from (city), for the weather when nothing better is known
 };
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD");

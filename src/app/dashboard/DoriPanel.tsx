@@ -30,6 +30,15 @@ const OPEN_KEY = "dori-open";
 
 const SPEAK_KEY = "dori-speak";
 
+/** The browser's time zone, sent with each message: when it changes, Dori guesses the user's city again. */
+function browserZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function readSpeak() {
   try {
     return localStorage.getItem(SPEAK_KEY) === "1";
@@ -192,7 +201,7 @@ export function DoriPanel() {
       setState((s) => (s ? { ...s, messages: [...s.messages, optimistic] } : s));
       setBusy({ mood: "thinking", text: "Thinking" });
       try {
-        const res = await fetch("/api/dori/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, mode, attachments }) });
+        const res = await fetch("/api/dori/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, mode, attachments, tz: browserZone() }) });
         if (!res.ok || !res.body) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || "Dori couldn't answer just now.");

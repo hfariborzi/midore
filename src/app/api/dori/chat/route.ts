@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { runTurn, type DoriEvent } from "@/lib/dori/agent";
+import { requestPlace } from "@/lib/request-place";
 import { logError } from "@/lib/log";
 import { rateLimitKey, RateLimitError } from "@/lib/rate-limit";
 
@@ -16,7 +17,7 @@ const attachmentSchema = z.object({
   dataUrl: z.string().max(4_000_000).regex(/^data:(image\/(png|jpeg|webp|gif)|application\/pdf);base64,[A-Za-z0-9+/=]+$/),
 });
 const bodySchema = z
-  .object({ text: z.string().max(8000).default(""), mode: z.enum(["chat", "day", "week", "checkin"]).default("chat"), attachments: z.array(attachmentSchema).max(3).default([]) })
+  .object({ text: z.string().max(8000).default(""), mode: z.enum(["chat", "day", "week", "checkin"]).default("chat"), attachments: z.array(attachmentSchema).max(3).default([]), tz: z.string().max(64).optional() })
   .refine((b) => b.attachments.reduce((n, a) => n + a.dataUrl.length, 0) <= 4_200_000, "Attachments are too large");
 
 /** One message to Dori. Streams newline-delimited JSON events: status updates, then the reply. */
@@ -36,7 +37,8 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       const emit = (e: DoriEvent) => controller.enqueue(encoder.encode(JSON.stringify(e) + "\n"));
       try {
-        await runTurn(user, parsed.data, emit);
+        const { tz, ...turn } = parsed.data;
+        await runTurn(user, { ...turn, near: requestPlace(req.headers, tz) }, emit);
       } catch (err) {
         logError("dori chat", err);
         emit({ type: "error", text: "Something went wrong. Please try again." });

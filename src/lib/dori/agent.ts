@@ -2,6 +2,7 @@
  * One turn with Dori: store the user's message, give the model the user's world and tools, run tool calls
  * until it answers, store the answer with what changed (and how to undo it), and stream progress.
  */
+import type { NearPlace } from "../request-place";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { db, doriActions, doriMessages, plans, type DoriMeta, type DoriMood, type User } from "@/db";
 import { aiConfigured, chatWithTools, type ChatMessage, type ContentPart } from "../ai/client";
@@ -28,7 +29,7 @@ export type DoriEvent =
   | { type: "error"; text: string };
 
 export type Attachment = { kind: "image" | "pdf"; name: string; dataUrl: string };
-export type TurnInput = { text: string; mode?: "chat" | "day" | "week" | "checkin"; attachments?: Attachment[] };
+export type TurnInput = { text: string; mode?: "chat" | "day" | "week" | "checkin"; attachments?: Attachment[]; near?: NearPlace };
 
 const LANG_TAG = /\[\[lang:([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*)\]\]\s*$/;
 
@@ -82,7 +83,7 @@ export async function runTurn(user: User, input: TurnInput, emit: (e: DoriEvent)
     },
   ];
 
-  const ctx: ToolContext = { user, refs, undo: [], actions: [], cards: [], changed: false, celebrated: false, concerned: false };
+  const ctx: ToolContext = { user, refs, undo: [], actions: [], cards: [], changed: false, celebrated: false, concerned: false, near: input.near };
   let answer = "";
   let usage = { inputTokens: 0, outputTokens: 0, requests: 0 };
   try {

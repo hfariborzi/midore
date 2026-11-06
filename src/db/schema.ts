@@ -60,7 +60,11 @@ export type DoriPrefs = {
   style?: string | null; // how Dori talks, in the user's words ("shorter", "like a coach")
   dueHeadsUpDays?: number | null; // an alert this many days before every due date, at 9 am
   checkIns?: CheckIn[]; // times Dori speaks first besides the morning brief
+  weatherPlace?: WeatherPlace | null; // the city the user said they live in, for the weather when no Home is saved
+  weatherGuess?: WeatherPlace | null; // Dori's guess at the city (from time zone and connection), kept until the time zone changes
 };
+
+export type WeatherPlace = { name: string; lat: number; lng: number; tz?: string };
 
 /** Dori speaking first at a set time: a notification, and on the web Dori opens with that conversation. */
 export type CheckInTopic = "week_review" | "day_wrap" | "habits" | "custom";

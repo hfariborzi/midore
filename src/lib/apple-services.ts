@@ -67,7 +67,12 @@ export async function geocode(q: string, near?: Coord): Promise<(Coord & { label
     lang: "en-US",
     ...(near ? { searchLocation: `${near.lat},${near.lng}` } : {}),
   });
-  const r = d.results?.[0];
+  let r = d.results?.[0];
+  if (!r) {
+    // A bare name ("Banff") can stump the geocoder; Apple's place search usually finds it.
+    const found = await mapsGet<typeof d>("/v1/search", { q: q.slice(0, 300), lang: "en-US", resultTypeFilter: "Address,Poi", ...(near ? { searchLocation: `${near.lat},${near.lng}` } : {}) }).catch(() => ({ results: [] }));
+    r = found.results?.[0];
+  }
   return r ? { lat: r.coordinate.latitude, lng: r.coordinate.longitude, label: (r.formattedAddressLines ?? [r.name ?? q]).join(", ") } : null;
 }
 

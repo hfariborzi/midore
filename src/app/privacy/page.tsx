@@ -195,7 +195,12 @@ export default function PrivacyPage() {
         send Apple Maps the start and end points: a saved place&apos;s coordinates, or an address or
         place name you gave or that is the location of the calendar event you asked about, with the time you want
         to leave or arrive. Nothing that identifies you (your name, email or account) is sent with these requests,
-        and {APP_NAME} keeps the forecasts it receives for at most 30 minutes.
+        and {APP_NAME} keeps the forecasts it receives for at most 30 minutes. If you ask about the weather without
+        naming a place and have no saved Home, Dori guesses your city: the city your connection comes from (which our
+        hosting provider, Vercel, works out from your IP address) if it fits your time zone, or otherwise your time
+        zone&apos;s city, and she says it&apos;s a guess. The guess is kept in your settings (the city&apos;s name and
+        coordinates rounded to about a kilometre, with your time zone) until your time zone changes. If you tell Dori
+        the city you live in, she keeps that instead, the same way.
       </p>
       <h3>From invitees</h3>
       <p>
