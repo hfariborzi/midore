@@ -658,9 +658,17 @@ function Message({ m, onChanged, onListen }: { m: Msg; onChanged: () => Promise<
       <div dir="auto" className="max-w-[92%] rounded-lg bg-amber-subtle px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-ink shadow-[inset_3px_0_0_var(--color-amber)]" lang={m.meta.lang}>
         {m.content}
       </div>
-      <button type="button" onClick={onListen} className="ml-1 inline-flex items-center gap-1 text-xs text-faint hover:text-ink" aria-label="Listen to this answer">
-        <Volume2 size={12} /> Listen
-      </button>
+      <div className="ml-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
+        <button type="button" onClick={onListen} className="inline-flex items-center gap-1 hover:text-ink" aria-label="Listen to this answer">
+          <Volume2 size={12} /> Listen
+        </button>
+        {/* Weather and maps data must be credited where it's shown. */}
+        {m.meta.credits?.map((c) => (
+          <a key={c.href} href={c.href} target="_blank" rel="noreferrer" className="underline-offset-2 hover:text-ink hover:underline">
+            {c.text}
+          </a>
+        ))}
+      </div>
       {m.meta.actions?.length ? (
         <div className={`ml-1 space-y-0.5 text-xs ${m.meta.undone ? "text-faint line-through" : "text-muted"}`}>
           {m.meta.actions.slice(0, 12).map((a, i) => (

@@ -495,6 +495,7 @@ export type DoriMeta = {
   undone?: boolean;
   proposal?: DoriProposal;
   cards?: DoriCard[];
+  credits?: { text: string; href: string }[]; // data sources shown under the reply (weather, maps)
   fromRule?: number; // posted by an automation ("tell me what's next"), not in reply to the user
 };
 

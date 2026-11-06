@@ -19,7 +19,7 @@ const HISTORY = 10;
 // calls can be used as is when every call succeeds, which saves a whole model round.
 const READ_TOOLS = new Set([
   "get_plan", "find_meeting_times", "check_capacity", "list_meetings", "propose_plan", "draft_emails", "propose_calendar_event",
-  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report", "event_details", "undo_last", "plan_history",
+  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report", "event_details", "undo_last", "plan_history", "weather", "travel_time",
 ]);
 
 export type DoriEvent =
@@ -131,6 +131,7 @@ export async function runTurn(user: User, input: TurnInput, emit: (e: DoriEvent)
     ...(ctx.actions.length ? { actions: ctx.actions, undoable: ctx.undo.length > 0 } : {}),
     ...(ctx.proposal ? { proposal: ctx.proposal } : {}),
     ...(ctx.cards.length ? { cards: ctx.cards } : {}),
+    ...(ctx.credits?.length ? { credits: ctx.credits } : {}),
   };
   const [reply] = await db.insert(doriMessages).values({ userId: user.id, role: "assistant", content: text, meta }).returning({ id: doriMessages.id });
   if (ctx.undo.length) await db.insert(doriActions).values({ userId: user.id, messageId: reply.id, undo: ctx.undo });

@@ -187,6 +187,16 @@ export default function PrivacyPage() {
         phone&apos;s location permission. {APP_NAME} never receives or stores where you are, only the places you saved.
         Dori sees only the names of your places, never where they are. Removing a place deletes it.
       </p>
+      <h3>Weather and travel times</h3>
+      <p>
+        Only when you ask Dori about the weather or how long it takes to get somewhere. For the weather, we send
+        the place&apos;s coordinates, rounded to about a kilometre, to Apple (WeatherKit) or, when Apple&apos;s
+        service isn&apos;t available, to the Norwegian Meteorological Institute (MET Norway). For a travel time, we
+        send Apple Maps the start and end points: a saved place&apos;s coordinates, or an address or
+        place name you gave or that is the location of the calendar event you asked about, with the time you want
+        to leave or arrive. Nothing that identifies you (your name, email or account) is sent with these requests,
+        and {APP_NAME} keeps the forecasts it receives for at most 30 minutes.
+      </p>
       <h3>From invitees</h3>
       <p>
         When you book a meeting we collect the details you enter: your name, email address, any guest email
@@ -249,6 +259,10 @@ export default function PrivacyPage() {
           countries where these providers operate.
         </li>
         <li><strong>Google and Microsoft</strong>, to read and update your calendars as described above.</li>
+        <li>
+          <strong>Apple</strong> (Apple Maps and WeatherKit) and <strong>MET Norway</strong>, only when you ask
+          Dori about the weather or travel times, and only the places and times described above.
+        </li>
         {aiConfigured() && (
           <li>
             <strong>The AI provider</strong> ({AI_PROVIDER_NAME}), only if you turn on AI categorisation or Dori, and

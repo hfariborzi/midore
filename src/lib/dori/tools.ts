@@ -21,6 +21,7 @@ import { firstDueFor, isRepeat, parseRepeat } from "../tasks/repeat";
 import { eventsWithRefs, type EventRefs } from "./context";
 import { CALENDAR_TOOL_DEFS, CALENDAR_TOOL_STATUS, calendarExecutors } from "./tools-calendar";
 import { RULE_TOOL_DEFS, RULE_TOOL_STATUS, ruleExecutors } from "./tools-rules";
+import { WORLD_TOOL_DEFS, WORLD_TOOL_STATUS, worldExecutors } from "./tools-world";
 
 export type ToolContext = {
   user: User;
@@ -33,6 +34,7 @@ export type ToolContext = {
   celebrated: boolean; // something got finished
   concerned: boolean; // a deadline or capacity warning came up
   bookingRefs?: Map<string, string>; // "b1" → booking uid, for this turn
+  credits?: { text: string; href: string }[]; // sources to credit under the reply (weather, maps)
 };
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD");
@@ -171,7 +173,7 @@ const TASK_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "draft_emails", description: "Prepare emails to the attendees of some events (to cancel or move them). The app adds the recipients; the user sends them from their own mail app.", parameters: S.obj({ event_refs: S.arr(S.str()), subject: S.str(), body: S.str("Signed with the user's first name") }, ["event_refs", "subject", "body"]) } },
 ];
 
-export const TOOL_DEFS: ToolDef[] = [...TASK_TOOL_DEFS, ...RULE_TOOL_DEFS, ...CALENDAR_TOOL_DEFS];
+export const TOOL_DEFS: ToolDef[] = [...TASK_TOOL_DEFS, ...RULE_TOOL_DEFS, ...CALENDAR_TOOL_DEFS, ...WORLD_TOOL_DEFS];
 
 // --- Helpers ----------------------------------------------------------------------------------------------
 
@@ -781,7 +783,7 @@ export async function deleteAreaConfirmed(userId: number, id: number): Promise<U
 }
 
 export async function runTool(ctx: ToolContext, name: string, argsJson: string): Promise<string> {
-  const exec = executors[name] ?? ruleExecutors[name] ?? calendarExecutors[name];
+  const exec = executors[name] ?? ruleExecutors[name] ?? calendarExecutors[name] ?? worldExecutors[name];
   if (!exec) return `Error: unknown tool ${name}.`;
   let args: unknown;
   try {
@@ -824,6 +826,7 @@ export const TOOL_STATUS: Record<string, string> = {
   list_meetings: "Looking at your calendar",
   draft_emails: "Drafting emails",
   ...RULE_TOOL_STATUS,
+  ...WORLD_TOOL_STATUS,
   ...CALENDAR_TOOL_STATUS,
 };
 
