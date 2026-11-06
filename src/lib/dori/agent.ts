@@ -8,6 +8,7 @@ import { aiConfigured, chatWithTools, type ChatMessage, type ContentPart } from 
 import { logError } from "../log";
 import { freshPlan, listNotes, replan } from "../planner";
 import { buildContext, type EventRefs } from "./context";
+import { checkInPrompt } from "./brief";
 import { DAY_PLAN_PROMPT, doriSystem, WEEK_PLAN_PROMPT } from "./prompt";
 import { runTool, TOOL_DEFS, TOOL_STATUS, type ToolContext } from "./tools";
 import { doriRoomLeft, recordDori } from "./usage";
@@ -18,7 +19,7 @@ const HISTORY = 10;
 // calls can be used as is when every call succeeds, which saves a whole model round.
 const READ_TOOLS = new Set([
   "get_plan", "find_meeting_times", "check_capacity", "list_meetings", "propose_plan", "draft_emails", "propose_calendar_event",
-  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report",
+  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report", "event_details", "undo_last",
 ]);
 
 export type DoriEvent =
@@ -27,7 +28,7 @@ export type DoriEvent =
   | { type: "error"; text: string };
 
 export type Attachment = { kind: "image" | "pdf"; name: string; dataUrl: string };
-export type TurnInput = { text: string; mode?: "chat" | "day" | "week"; attachments?: Attachment[] };
+export type TurnInput = { text: string; mode?: "chat" | "day" | "week" | "checkin"; attachments?: Attachment[] };
 
 const LANG_TAG = /\[\[lang:([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*)\]\]\s*$/;
 
@@ -43,8 +44,11 @@ export async function runTurn(user: User, input: TurnInput, emit: (e: DoriEvent)
   if (!user.doriConsentAt) return emit({ type: "error", text: "Turn Dori on first." });
   if (!(await doriRoomLeft(user.id))) return emit({ type: "error", text: "Dori has answered a lot today. She'll be back tomorrow." });
 
-  const attachments = input.mode === "day" || input.mode === "week" ? [] : (input.attachments ?? []);
-  const userText = input.mode === "day" ? DAY_PLAN_PROMPT : input.mode === "week" ? WEEK_PLAN_PROMPT : input.text.trim().slice(0, 8000);
+  const attachments = input.mode && input.mode !== "chat" ? [] : (input.attachments ?? []);
+  // A check-in (Dori speaking first at a set time) opens with what that check-in asks.
+  const checkIn = input.mode === "checkin" ? user.doriPrefs?.checkIns?.find((c) => c.id === input.text.trim()) : undefined;
+  if (input.mode === "checkin" && !checkIn) return emit({ type: "error", text: "That check-in was removed." });
+  const userText = input.mode === "day" ? DAY_PLAN_PROMPT : input.mode === "week" ? WEEK_PLAN_PROMPT : checkIn ? checkInPrompt(checkIn) : input.text.trim().slice(0, 8000);
   if (!userText && !attachments.length) return emit({ type: "error", text: "Say something to Dori." });
   // Only the names of attachments are kept in the conversation; the files themselves are sent once and dropped.
   const attachedNote = attachments.length ? `(attached: ${attachments.map((a) => a.name || (a.kind === "pdf" ? "a PDF" : "a photo")).join(", ")})` : "";

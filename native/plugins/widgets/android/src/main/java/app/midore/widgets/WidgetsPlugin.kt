@@ -41,6 +41,16 @@ class WidgetsPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
     }
 
+    /** Replace the places the phone watches for arriving and leaving alerts (see PlaceAlerts). */
+    @Command
+    fun setPlaceAlerts(invoke: Invoke) {
+        val raw = invoke.getRawArgs()
+        val fences = org.json.JSONObject(raw).optJSONArray("fences") ?: org.json.JSONArray()
+        PlaceAlerts.set(activity, fences) { registered ->
+            invoke.resolve(JSObject().put("registered", registered))
+        }
+    }
+
     /**
      * Sign-in in a Custom Tab over the app (Chrome's in-app browser). The page ends on a midore:// link, which
      * reopens MainActivity (singleTask), closing the tab; the app picks the link up as a deep link.

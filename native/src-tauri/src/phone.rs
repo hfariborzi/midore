@@ -1,6 +1,7 @@
 //! Phones only: what the app does on its own, without the web page.
-//! - Reminders scheduled on the phone, so they arrive with the app closed: the morning brief, alerts set on tasks
-//!   and reminders, a heads-up just before planned work starts, and "How did it go?" when it ends.
+//! - Reminders scheduled on the phone, so they arrive with the app closed: the morning brief and Dori's check-ins,
+//!   alerts set on tasks and reminders, a heads-up just before planned work starts, and "How did it go?" when it ends.
+//! - Alerts on arriving at or leaving a saved place, which the phone watches itself (plugins/widgets).
 //! - The Live Activity on iPhone: what's on now, on the Lock Screen and in the Dynamic Island.
 //! - An offline copy of the next two days for the start page.
 //! It syncs when the app opens or comes back to the front, after signing in, and every few minutes while open.
@@ -18,6 +19,8 @@ const HEADS_UP_SECS: i64 = 120;
 /// iOS keeps at most 64 pending notifications per app.
 const MAX_SCHEDULED: usize = 40;
 const SYNC_EVERY: Duration = Duration::from_secs(300);
+/// The places last handed to the phone, so they are re-registered only when they change.
+static LAST_FENCES: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 pub fn start<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
@@ -45,6 +48,7 @@ async fn sync<R: Runtime>(app: &AppHandle<R>) {
             if let Ok(agenda) = serde_json::from_value::<Agenda>(json) {
                 schedule(app, &agenda);
                 live_activity(app, &agenda);
+                place_alerts(app, &agenda);
             }
         }
         Err(api::ApiError::SignedOut) => crate::sign_out_inner(app),
@@ -55,6 +59,11 @@ async fn sync<R: Runtime>(app: &AppHandle<R>) {
 /// Signed out: no reminders and no Live Activity.
 pub fn clear<R: Runtime>(app: &AppHandle<R>) {
     cancel_pending(app);
+    {
+        use tauri_plugin_midore_widgets::MidoreWidgetsExt;
+        let _ = app.midore_widgets().set_place_alerts(Vec::new());
+        *LAST_FENCES.lock().unwrap() = None;
+    }
     #[cfg(target_os = "ios")]
     {
         use tauri_plugin_midore_widgets::MidoreWidgetsExt;
@@ -62,10 +71,39 @@ pub fn clear<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Hand the place alerts to the phone, which watches the places with the app closed. Only when something changed,
+/// so the phone isn't asked to re-register its places every few minutes.
+fn place_alerts<R: Runtime>(app: &AppHandle<R>, agenda: &Agenda) {
+    use tauri_plugin_midore_widgets::{MidoreWidgetsExt, PlaceFence};
+    let fences: Vec<PlaceFence> = agenda
+        .place_alerts
+        .iter()
+        .take(18)
+        .map(|p| PlaceFence {
+            id: p.id.clone(),
+            title: p.title.clone(),
+            body: format!("{} {}", if p.on == "leave" { "Leaving" } else { "At" }, p.place),
+            lat: p.lat,
+            lng: p.lng,
+            radius: p.radius.clamp(100.0, 2000.0),
+            on_arrive: p.on != "leave",
+        })
+        .collect();
+    let key = serde_json::to_string(&fences).unwrap_or_default();
+    let mut last = LAST_FENCES.lock().unwrap();
+    if last.as_deref() == Some(key.as_str()) {
+        return;
+    }
+    if matches!(app.midore_widgets().set_place_alerts(fences), Ok(true)) {
+        *last = Some(key);
+    }
+}
+
 fn cancel_pending<R: Runtime>(app: &AppHandle<R>) {
     let n = app.notification();
     if let Ok(pending) = n.pending() {
-        let ids: Vec<i32> = pending.iter().map(|p| p.id()).collect();
+        // Place alerts (plugins/widgets) aren't numbered and show up as -1: they are replaced separately.
+        let ids: Vec<i32> = pending.iter().map(|p| p.id()).filter(|id| *id >= 0).collect();
         if !ids.is_empty() {
             let _ = n.cancel(ids);
         }
@@ -116,7 +154,7 @@ fn schedule<R: Runtime>(app: &AppHandle<R>, agenda: &Agenda) {
     }
     // Alerts the person asked for (and the morning brief) come first when the phone's limit is near.
     let mut asked = Vec::new();
-    if let Some(brief) = &agenda.brief {
+    for brief in agenda.brief.iter().chain(agenda.check_ins.iter()) {
         if let Some(at) = parse(&brief.at).filter(|at| *at > now) {
             asked.push((note_id(&brief.id, 4), at, brief.title.clone(), brief.body.clone()));
         }

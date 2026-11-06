@@ -16,7 +16,7 @@ const attachmentSchema = z.object({
   dataUrl: z.string().max(4_000_000).regex(/^data:(image\/(png|jpeg|webp|gif)|application\/pdf);base64,[A-Za-z0-9+/=]+$/),
 });
 const bodySchema = z
-  .object({ text: z.string().max(8000).default(""), mode: z.enum(["chat", "day", "week"]).default("chat"), attachments: z.array(attachmentSchema).max(3).default([]) })
+  .object({ text: z.string().max(8000).default(""), mode: z.enum(["chat", "day", "week", "checkin"]).default("chat"), attachments: z.array(attachmentSchema).max(3).default([]) })
   .refine((b) => b.attachments.reduce((n, a) => n + a.dataUrl.length, 0) <= 4_200_000, "Attachments are too large");
 
 /** One message to Dori. Streams newline-delimited JSON events: status updates, then the reply. */

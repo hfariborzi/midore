@@ -250,7 +250,18 @@ type GraphEvent = GraphEventLite & {
   body?: { content?: string };
   attendees?: GraphAttendee[];
   seriesMasterId?: string | null;
+  isOrganizer?: boolean;
+  organizer?: { emailAddress?: { name?: string; address?: string } };
+  responseStatus?: { response?: string };
 };
+
+/** The user's own answer to an invitation; Graph says "none" when they haven't answered. */
+function graphResponse(e: GraphEvent): string | undefined {
+  if (!e.attendees?.length) return undefined;
+  if (e.isOrganizer) return "organizer";
+  const r = e.responseStatus?.response;
+  return r === "accepted" || r === "declined" ? r : r === "tentativelyAccepted" ? "tentative" : "needsAction";
+}
 
 export const microsoftCalendar: CalendarProvider = {
   provider: "microsoft",
@@ -279,7 +290,7 @@ export const microsoftCalendar: CalendarProvider = {
   },
 
   async listEvents(account, calendars, timeMin, timeMax): Promise<CalendarEvent[]> {
-    const select = "id,subject,start,end,isAllDay,isCancelled,location,onlineMeeting,onlineMeetingUrl,webLink,body,attendees,showAs,seriesMasterId";
+    const select = "id,subject,start,end,isAllDay,isCancelled,location,onlineMeeting,onlineMeetingUrl,webLink,body,attendees,showAs,seriesMasterId,isOrganizer,organizer,responseStatus";
     const results = await Promise.all(
       calendars.map(async (c) => {
         const items = await graphPages<GraphEvent>(account, viewPath(c.id, timeMin, timeMax, select), UTC_PREFER).catch((err) => {
@@ -305,6 +316,8 @@ export const microsoftCalendar: CalendarProvider = {
             htmlLink: e.webLink || undefined,
             description: e.body?.content?.trim() || undefined,
             attendees: mapAttendees(e.attendees),
+            organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || undefined,
+            myResponse: graphResponse(e),
             canEdit: c.canWrite,
           }));
       }),

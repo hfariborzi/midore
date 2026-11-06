@@ -9,8 +9,10 @@ import { Dori } from "@/components/Dori";
 import { acceptDoriProposal, clearDoriConversation, confirmDoriBookingCancel, confirmDoriDeleteArea, confirmDoriRsvp, confirmDoriEvent, confirmDoriEventChange, discardDoriProposal, dismissDoriEvent, setDoriEnabled, undoDoriMessage } from "./dori-actions";
 
 type Msg = { id: number; role: "user" | "assistant"; content: string; meta: DoriMeta };
-type State = { available: boolean; enabled: boolean; name: string; voice: boolean; news: number; briefAt: string | null; messages: Msg[] };
+type CheckInTime = { id: string; at: string; weekdays: number[] };
+type State = { available: boolean; enabled: boolean; name: string; voice: boolean; news: number; briefAt: string | null; checkIns?: CheckInTime[]; messages: Msg[] };
 const BRIEF_KEY = "midore:dori-brief"; // the last day the morning brief opened Dori here
+const CHECKIN_KEY = "midore:dori-checkin"; // the last check-in (id and day) that opened Dori here
 
 /** Other parts of the dashboard open Dori with this event, optionally with text to send or to prefill. */
 export const OPEN_DORI = "doorcal:open-dori";
@@ -135,14 +137,14 @@ export function DoriPanel() {
   }, [state?.messages.length, busy, open]);
 
   const send = useCallback(
-    async (text: string, mode: "chat" | "day" | "week" = "chat", attachments: Attached[] = []) => {
+    async (text: string, mode: "chat" | "day" | "week" | "checkin" = "chat", attachments: Attached[] = []) => {
       if (busy || (!text.trim() && !attachments.length && mode === "chat")) return;
       setError(null);
       setInput("");
       setFiles([]);
       if (inputRef.current) inputRef.current.style.height = "";
       const note = attachments.length ? `(attached: ${attachments.map((a) => a.name).join(", ")})` : "";
-      const optimistic: Msg = { id: -Date.now(), role: "user", content: mode === "day" ? "Day plan" : mode === "week" ? "Week plan" : [text.trim(), note].filter(Boolean).join("\n"), meta: {} };
+      const optimistic: Msg = { id: -Date.now(), role: "user", content: mode === "day" ? "Day plan" : mode === "week" ? "Week plan" : mode === "checkin" ? "Check-in" : [text.trim(), note].filter(Boolean).join("\n"), meta: {} };
       setState((s) => (s ? { ...s, messages: [...s.messages, optimistic] } : s));
       setBusy({ mood: "thinking", text: "Thinking" });
       try {
@@ -206,6 +208,33 @@ export function DoriPanel() {
     });
     return () => cancelAnimationFrame(id);
   }, [state?.enabled, state?.briefAt, busy, send]);
+
+  // Check-ins (a Sunday review, an end-of-day wrap-up): the first time Midore is open in the 3 hours after one,
+  // Dori opens with it. The morning brief takes the morning; a check-in never runs twice.
+  useEffect(() => {
+    if (!state?.enabled || !state.checkIns?.length || busy) return;
+    const now = new Date();
+    const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    const weekday = ((now.getDay() + 6) % 7) + 1;
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const due = state.checkIns.find((c) => {
+      const [h, m] = c.at.split(":").map(Number);
+      const since = mins - (h * 60 + m);
+      return (!c.weekdays.length || c.weekdays.includes(weekday)) && since >= 0 && since <= 3 * 60;
+    });
+    if (!due) return;
+    try {
+      if (localStorage.getItem(CHECKIN_KEY) === `${due.id}:${today}`) return;
+      localStorage.setItem(CHECKIN_KEY, `${due.id}:${today}`);
+    } catch {
+      return;
+    }
+    const id = requestAnimationFrame(() => {
+      setOpen(true);
+      void send(due.id, "checkin");
+    });
+    return () => cancelAnimationFrame(id);
+  }, [state?.enabled, state?.checkIns, busy, send]);
 
   // The panel stays docked across visits on wide screens if it was open last time.
   useEffect(() => {

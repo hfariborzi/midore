@@ -27,6 +27,11 @@ fn session_file() -> Option<PathBuf> {
 }
 
 impl<R: Runtime> MidoreWidgets<R> {
+    /// Phones only; computers don't watch places.
+    pub fn set_place_alerts(&self, _fences: Vec<PlaceFence>) -> crate::Result<bool> {
+        Ok(true)
+    }
+
     pub fn set_session(&self, session: Session) -> crate::Result<()> {
         let Some(path) = session_file() else { return Ok(()) };
         if session.token.is_none() {

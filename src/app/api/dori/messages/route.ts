@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
       voice: speechAvailable(),
       news,
       briefAt: user.doriPrefs?.briefAt ?? null,
+      checkIns: (user.doriPrefs?.checkIns ?? []).map((c) => ({ id: c.id, at: c.at, weekdays: c.weekdays })),
       messages: rows.reverse().map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta, at: m.createdAt })),
     },
     { headers: { "Cache-Control": "no-store" } },

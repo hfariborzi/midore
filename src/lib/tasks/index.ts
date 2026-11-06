@@ -8,6 +8,7 @@ import { db, projects, taskLinks, tasks, type Project, type Task, type TaskLink,
 import { nextDue } from "../planner/core";
 import { MAX_TASKS, transition } from "./core";
 import { nudgeTimes } from "./repeat";
+import { runDoneRules } from "../automations";
 
 export * from "./core";
 
@@ -52,6 +53,8 @@ export async function applyStatus(userId: number, task: Task, status: TaskStatus
     .set({ status: next.status, residue: next.residue, completedAt: next.completed ? (task.completedAt ?? new Date()) : null, updatedAt: new Date() })
     .where(and(eq(tasks.id, task.id), eq(tasks.userId, userId)));
   const finishing = (status === "done" || status === "good_enough" || (status === "dropped" && opts.skip)) && task.status === "open";
+  // Rules the user set up ("every time I finish a chapter, …").
+  if (finishing && !opts.skip) await runDoneRules(userId, task, tz);
   if (!finishing || !task.repeat) return {};
   const count = (await listTasks(userId)).length;
   if (count >= MAX_TASKS) return {};

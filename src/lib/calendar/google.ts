@@ -203,6 +203,8 @@ export const googleCalendar: CalendarProvider = {
               attendees: (e.attendees ?? [])
                 .filter((a) => a.email)
                 .map((a) => ({ email: a.email!, name: a.displayName ?? undefined, status: a.responseStatus ?? undefined })),
+              organizer: e.organizer?.displayName || e.organizer?.email || undefined,
+              myResponse: e.attendees?.length ? (e.organizer?.self ? "organizer" : e.attendees.find((a) => a.self)?.responseStatus ?? undefined) : undefined,
               canEdit: c.canWrite,
             }));
         }),

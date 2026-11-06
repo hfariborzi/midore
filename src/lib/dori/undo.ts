@@ -1,8 +1,8 @@
 /** Reverses what Dori did in one message, newest change first. */
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { db, bookings, categories, dayNotes, doriActions, eventTypes, pinnedBlocks, projects, schedules, taskLinks, tasks, users, type UndoOp } from "@/db";
+import { db, automations, bookings, categories, dayNotes, doriActions, eventTypes, pinnedBlocks, projects, schedules, taskLinks, tasks, users, type UndoOp } from "@/db";
 
-const DATE_KEYS = new Set(["createdAt", "updatedAt", "completedAt", "start", "end", "remindAt"]);
+const DATE_KEYS = new Set(["createdAt", "updatedAt", "completedAt", "start", "end", "remindAt", "lastRunAt"]);
 function revive(row: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(row)) out[k] = DATE_KEYS.has(k) && typeof v === "string" ? new Date(v) : v;
@@ -11,6 +11,14 @@ function revive(row: Record<string, unknown>) {
 
 async function apply(userId: number, op: UndoOp) {
   switch (op.op) {
+    case "deleteAutomation":
+      await db.delete(automations).where(and(eq(automations.id, op.id), eq(automations.userId, userId)));
+      break;
+    case "restoreAutomation": {
+      const row = revive(op.row) as typeof automations.$inferInsert;
+      if (row.userId === userId) await db.insert(automations).values(row).onConflictDoNothing();
+      break;
+    }
     case "deleteTask":
       await db.delete(tasks).where(and(eq(tasks.id, op.id), eq(tasks.userId, userId)));
       break;

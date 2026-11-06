@@ -19,7 +19,7 @@ export const metadata = {
   description: `How ${APP_NAME} collects, uses, shares, protects and deletes your data, including Google user data.`,
 };
 
-const UPDATED = "November 5, 2026";
+const UPDATED = "November 6, 2026";
 
 export default function PrivacyPage() {
   return (
@@ -139,11 +139,14 @@ export default function PrivacyPage() {
             needs to answer: your message, any photo or PDF you attach to it, the upcoming items of a calendar link you
             give her to read (such as a course calendar), and your recent conversation with her; your areas, projects and tasks
             (titles, notes, dates, estimates, priorities and the names of people you typed); notes she keeps for
-            you, such as &ldquo;not in the mood for writing today&rdquo;; your working hours and planned work; and,
+            you, such as &ldquo;not in the mood for writing today&rdquo;; the rules and check-ins you set up and the names
+            (not the locations) of places you saved; your working hours and planned work; and,
             from your calendars for the coming week (or a range you ask about), each event&apos;s title, start and
             end time, calendar name, number of attendees and your own answer to the invitation; your booking pages (title, lengths, link) and booking
-            hours; and, when you ask about bookings, each booking&apos;s page, time and number of guests. Attendee and
-            booker names and email addresses, answers to booking questions, event descriptions and locations are
+            hours; and, when you ask about bookings, each booking&apos;s page, time and number of guests. When you
+            ask about one meeting (&ldquo;who&apos;s in my 3 pm?&rdquo;), she also gets that meeting&apos;s guest
+            names (or email addresses when a guest has no name), their answers, its organizer, location and video
+            link. Booker names and email addresses, answers to booking questions and event descriptions are
             never sent.{DORI_MODEL ? ` The model currently used is ${DORI_MODEL}.` : ""}{" "}
             The same no-training and zero-data-retention setup described above for AI categorisation applies, and
             requests are subject to daily limits per user and for the whole service.
@@ -171,7 +174,18 @@ export default function PrivacyPage() {
       <h3>Settings hosts create</h3>
       <p>
         Your username, display name, headline, welcome message, time zone, availability schedules and event types,
-        including any questions you ask invitees.
+        including any questions you ask invitees. Also any rules you set up (&ldquo;every time I finish a chapter,
+        add a review&rdquo;) and times you asked Dori to check in with you.
+      </p>
+      <h3>Places you save</h3>
+      <p>
+        If you save a place (such as Home or Work) for reminders on arriving or leaving, {APP_NAME} stores its name,
+        its coordinates and the distance you chose. The coordinates come from your browser&apos;s location, which it
+        asks you to share once when you press &ldquo;Use where I am now&rdquo;, or from coordinates or a map link you
+        paste. The Midore phone app hands your saved places to your phone&apos;s own location service (Apple&apos;s or
+        Google&apos;s), which tells the app when you arrive or leave so it can show the reminder; this needs your
+        phone&apos;s location permission. {APP_NAME} never receives or stores where you are, only the places you saved.
+        Dori sees only the names of your places, never where they are. Removing a place deletes it.
       </p>
       <h3>From invitees</h3>
       <p>

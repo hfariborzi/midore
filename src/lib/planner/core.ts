@@ -27,6 +27,7 @@ export type PlanTask = {
   position: number;
   projectId?: number | null;
   categoryId?: number | null;
+  rank?: number | null; // the importance the user gave its project (1 = most); unranked work comes after ranked
 };
 
 export type DayRule = {
@@ -109,7 +110,26 @@ export function freeTime(input: Pick<PlanInput, "tz" | "now" | "weekly" | "overr
   return out.sort((a, b) => a.start - b.start);
 }
 
-/** Planning order: deadline first (hard before soft on the same day), then priority, then the user's order. */
+/**
+ * A project paused from a later day ("pause the TA project after Dec 15"): its work is skipped on each day from
+ * then on (until the day it resumes, if set). The daily job turns it into an ordinary pause on that day.
+ */
+export function pauseFromRules(projects: { id: number; status: string; pausedFrom: string | null; pausedUntil: string | null }[], tasks: { id: number; projectId: number | null }[], tz: string, now: number, horizonDays: number): DayRule[] {
+  const out: DayRule[] = [];
+  const start = DateTime.fromMillis(now, { zone: tz }).startOf("day");
+  for (const p of projects) {
+    if (p.status !== "active" || !p.pausedFrom) continue;
+    const ids = tasks.filter((t) => t.projectId === p.id).map((t) => t.id);
+    if (!ids.length) continue;
+    for (let i = 0; i <= horizonDays; i++) {
+      const day = start.plus({ days: i }).toISODate()!;
+      if (day >= p.pausedFrom && !(p.pausedUntil && day >= p.pausedUntil)) out.push({ day, skipTaskIds: ids });
+    }
+  }
+  return out;
+}
+
+/** Planning order: deadline first (hard before soft on the same day), then priority, then project rank, then the user's order. */
 function compare(a: PlanTask, b: PlanTask): number {
   if (a.dueDate !== b.dueDate) {
     if (!a.dueDate) return 1;
@@ -117,7 +137,7 @@ function compare(a: PlanTask, b: PlanTask): number {
     return a.dueDate < b.dueDate ? -1 : 1;
   }
   if (a.hardDeadline !== b.hardDeadline) return a.hardDeadline ? -1 : 1;
-  return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.position - b.position || a.id - b.id;
+  return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || (a.rank ?? 1e6) - (b.rank ?? 1e6) || a.position - b.position || a.id - b.id;
 }
 
 /** Meetings take their buffer with them: busy time ends later on days with a buffer rule. */

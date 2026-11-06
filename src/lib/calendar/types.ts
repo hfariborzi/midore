@@ -37,6 +37,8 @@ export type CalendarEvent = {
   htmlLink?: string;
   description?: string;
   attendees: Attendee[];
+  organizer?: string; // name, or email when there is no name
+  myResponse?: string; // the user's own answer, when they were invited: needsAction | accepted | declined | tentative | organizer
   canEdit: boolean;
 };
 

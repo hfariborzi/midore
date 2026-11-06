@@ -2,16 +2,19 @@
  * What Dori sees each turn: a compact picture of the user's areas, projects, open tasks, the coming week's
  * events and planned work, deadlines at risk, notes for the day and changes since last time.
  *
- * Privacy: events carry only their title, time, calendar name and attendee count. Attendee names and emails,
- * descriptions and locations never go to the model; when Dori drafts emails, the app adds recipients itself.
+ * Privacy: events carry only their title, time, calendar name, attendee count and the user's own answer. Who is
+ * invited, where it is and its join link go to the model only when the user asks about one meeting
+ * (the event_details tool). Descriptions never do; when Dori drafts emails, the app adds recipients itself.
  */
 import { and, desc, eq, gte, lt } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { db, pinnedBlocks, tasks as tasksTable, type DayNote, type Plan, type Task, type User, type WeeklyHours } from "@/db";
+import { db, pinnedBlocks, places as placesTable, tasks as tasksTable, type DayNote, type Plan, type Task, type User, type WeeklyHours } from "@/db";
 import { eventsForAccounts, listAccounts, type CalendarEvent } from "../calendar";
 import { ensureDefaults, listEventTypes } from "../data";
 import { listCategories } from "../labels";
 import { blockedTaskIds, compareTasks, isComplete, listLinks, listProjects, listTasks } from "../tasks";
+import { listAutomations } from "../automations";
+import { checkInLabel } from "./brief";
 
 const MAX_OPEN_TASKS = 200;
 const DAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -44,6 +47,7 @@ export async function eventsWithRefs(user: User, from: Date, to: Date, refs: Eve
   const mine = new Set(accounts.map((a) => a.email.toLowerCase()));
   // The user's own answer to an invitation (never anyone else's): for "which invitations haven't I answered?".
   const answer = (e: CalendarEvent) => {
+    if (e.myResponse) return MY_ANSWER[e.myResponse];
     const me = e.attendees.find((a) => mine.has(a.email.toLowerCase()));
     return me?.status ? MY_ANSWER[me.status] : undefined;
   };
@@ -78,7 +82,7 @@ function noteRules(n: DayNote) {
 export async function buildContext(user: User, plan: Plan, refs: EventRefs, notes: DayNote[]) {
   const tz = user.timezone;
   const now = DateTime.now().setZone(tz);
-  const [areas, projects, tasks, links, recent, pages, yesterday] = await Promise.all([
+  const [areas, projects, tasks, links, recent, pages, yesterday, rules, placeRows] = await Promise.all([
     listCategories(user.id),
     listProjects(user.id),
     listTasks(user.id),
@@ -87,7 +91,11 @@ export async function buildContext(user: User, plan: Plan, refs: EventRefs, note
     listEventTypes(user.id),
     // What was planned yesterday (kept as history when the day passed), for "mark yesterday's work done".
     db.select().from(pinnedBlocks).where(and(eq(pinnedBlocks.userId, user.id), gte(pinnedBlocks.start, now.minus({ days: 1 }).startOf("day").toJSDate()), lt(pinnedBlocks.start, now.startOf("day").toJSDate()))).orderBy(pinnedBlocks.start).limit(30),
+    listAutomations(user.id),
+    // Only the names of saved places: where they are never goes to the model.
+    db.select({ id: placesTable.id, name: placesTable.name }).from(placesTable).where(eq(placesTable.userId, user.id)),
   ]);
+  const placeName = new Map(placeRows.map((p) => [p.id, p.name]));
   const { schedule } = await ensureDefaults(user);
   const weekly = user.workHours ?? schedule.weekly;
   const blocked = blockedTaskIds(tasks, links);
@@ -113,6 +121,7 @@ export async function buildContext(user: User, plan: Plan, refs: EventRefs, note
     ...(t.waitingOn ? { waiting_on: t.waitingOn } : {}),
     ...(t.checklist.length ? { checklist: t.checklist.slice(0, 12).map((i) => `${i.done ? "[x]" : "[ ]"} ${i.text.slice(0, 60)}`) } : {}),
     ...(t.deferCount > 1 ? { pushed: t.deferCount } : {}),
+    ...(t.placeId && placeName.has(t.placeId) ? { place_alert: `${t.placeOn === "leave" ? "leaving" : "arriving at"} ${placeName.get(t.placeId)}` } : {}),
     ...(t.notes ? { notes: t.notes.slice(0, 160) } : {}),
     ...(blocked.has(t.id) ? { waiting: true } : {}),
   });
@@ -125,7 +134,7 @@ export async function buildContext(user: User, plan: Plan, refs: EventRefs, note
     projects: projects.filter((p) => p.status !== "done").map((p) => {
       const mine = tasks.filter((t) => t.projectId === p.id && t.status !== "dropped");
       return {
-        id: p.id, name: p.name, ...(p.categoryId ? { area: p.categoryId } : {}), ...(p.targetDate ? { target: p.targetDate } : {}), ...(p.status !== "active" ? { status: p.status } : {}), ...(p.pausedUntil ? { paused_until: p.pausedUntil } : {}),
+        id: p.id, name: p.name, ...(p.categoryId ? { area: p.categoryId } : {}), ...(p.targetDate ? { target: p.targetDate } : {}), ...(p.status !== "active" ? { status: p.status } : {}), ...(p.pausedUntil ? { paused_until: p.pausedUntil } : {}), ...(p.pausedFrom ? { pauses_from: p.pausedFrom } : {}), ...(p.rank ? { rank: p.rank } : {}),
         tasks_open: mine.filter((t) => !isComplete(t.status)).length, tasks_done: mine.filter((t) => isComplete(t.status)).length,
         ...(mine.length ? { last_activity: DateTime.fromMillis(Math.max(...mine.map((t) => (t.completedAt ?? t.updatedAt).getTime())), { zone: tz }).toISODate() } : {}),
         ...(p.notes ? { notes: p.notes.slice(0, 160) } : {}),
@@ -144,6 +153,10 @@ export async function buildContext(user: User, plan: Plan, refs: EventRefs, note
     notes: notes.map((n) => ({ id: n.id, day: n.day ?? (n.weekday ? `every ${DAY_NAMES[n.weekday]}` : "always"), text: n.text, ...noteRules(n) })),
     booking_hours: hoursText(schedule.weekly),
     booking_pages: pages.map((p) => ({ id: p.id, title: p.title, minutes: p.durations, ...(p.active ? {} : { paused: true }) })),
+    automations: rules.filter((r) => r.enabled).map((r) => ({ id: r.id, rule: r.label.slice(0, 200), ...(r.runs ? { ran: r.runs } : {}) })),
+    check_ins: (user.doriPrefs?.checkIns ?? []).map((c) => ({ id: c.id, what: checkInLabel(c) })),
+    ...(user.doriPrefs?.briefAt ? { morning_brief: user.doriPrefs.briefAt } : {}),
+    places: placeRows.map((p) => p.name),
     changes_since_last_time: unseen.map((n) => n.text),
     ...(problems.length ? { calendar_problems: problems.map((p) => `${p.email} ${p.message}`) } : {}),
   };

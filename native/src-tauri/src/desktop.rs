@@ -410,13 +410,13 @@ fn place_under<R: Runtime>(app: &AppHandle<R>, window: &tauri::WebviewWindow<R>,
 }
 
 /// Planned work: a heads-up just before it starts, and "how did it go?" when it ends. Alerts set on tasks and
-/// reminders, and the morning brief, fire at their time.
+/// reminders, the morning brief and Dori's check-ins fire at their time.
 fn notify<R: Runtime>(app: &AppHandle<R>, agenda: &Agenda) {
     let (items, alerts) = (&agenda.items, &agenda.alerts);
     let now = Local::now();
     let notified = app.state::<Notified>();
     let mut seen = notified.0.lock().unwrap();
-    if let Some(brief) = &agenda.brief {
+    for brief in agenda.brief.iter().chain(agenda.check_ins.iter()) {
         let due = parse(&brief.at).map(|at| (now - at).num_seconds());
         if due.is_some_and(|s| (0..=REFRESH_EVERY.as_secs() as i64 * 2).contains(&s)) && seen.insert(brief.id.clone()) {
             let _ = app.notification().builder().title(brief.title.clone()).body(brief.body.clone()).show();

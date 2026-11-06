@@ -59,6 +59,11 @@ if (!yml.includes("MidoreWidgets_iOS")) {
   writeFileSync(file, yml);
 }
 
+// Place alerts ("remind me when I get home") are location-triggered notifications: iOS asks for "While Using".
+if (!yml.includes("NSLocationWhenInUseUsageDescription")) {
+  yml = yml.replace("        LSRequiresIPhoneOS: true\n", '        LSRequiresIPhoneOS: true\n        NSLocationWhenInUseUsageDescription: "Midore uses your location only to alert you when you arrive at or leave a place you saved, like Home or Work."\n');
+}
+
 // Live Activities: what's on now on the Lock Screen and in the Dynamic Island (started by the app).
 if (!yml.includes("NSSupportsLiveActivities")) {
   yml = yml.replace("        LSRequiresIPhoneOS: true\n", "        LSRequiresIPhoneOS: true\n        NSSupportsLiveActivities: true\n");

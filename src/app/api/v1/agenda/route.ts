@@ -1,12 +1,12 @@
 import { DateTime } from "luxon";
-import { and, eq } from "drizzle-orm";
-import { db, tasks } from "@/db";
+import { and, eq, gte, isNotNull } from "drizzle-orm";
+import { db, places, tasks } from "@/db";
 import { json, withDevice } from "@/lib/api-v1";
 import { eventsForAccounts, listAccounts } from "@/lib/calendar";
 import { eventKey, labelEvents } from "@/lib/labels";
 import { GRAPHITE, toPalette } from "@/lib/palette";
 import { blockState, planBlocks } from "@/lib/plan-view";
-import { buildBrief, nextBriefTime } from "@/lib/dori/brief";
+import { buildBrief, buildCheckIn, checkInTimes, nextBriefTime } from "@/lib/dori/brief";
 import { upcomingAlerts } from "@/lib/tasks";
 
 export const maxDuration = 30;
@@ -76,6 +76,27 @@ export async function GET(req: Request) {
       const risky = [...new Set(blocks.filter((b) => b.risk && DateTime.fromISO(b.start, { zone: user.timezone }).toISODate() === day).map((b) => b.title))];
       brief = buildBrief(briefAt, items, due.length, risky);
     }
+    // Check-ins (Dori speaking first at other times), with a count of what got done to make them concrete.
+    const checkInAt = checkInTimes(user.doriPrefs?.checkIns, user.timezone, Math.max(start.toMillis(), now - 10 * 60_000), end.toMillis());
+    let checkIns: ReturnType<typeof buildCheckIn>[] = [];
+    if (checkInAt.length) {
+      const weekStart = DateTime.now().setZone(user.timezone).startOf("week");
+      const finished = await db.select({ status: tasks.status, completedAt: tasks.completedAt }).from(tasks).where(and(eq(tasks.userId, user.id), gte(tasks.completedAt, weekStart.toJSDate())));
+      const done = finished.filter((t) => t.status === "done" || t.status === "good_enough");
+      checkIns = checkInAt.map(({ c, at }) => {
+        const dayStart = at.startOf("day").toMillis();
+        const today = done.filter((t) => t.completedAt!.getTime() >= dayStart && t.completedAt!.getTime() < at.toMillis()).length;
+        const openToday = blocks.filter((b) => blockState(b) === "open" && DateTime.fromISO(b.start, { zone: user.timezone }).toISODate() === at.toISODate()).length;
+        return buildCheckIn(c, at, { today, week: done.length, openToday });
+      });
+    }
+    // Alerts on arriving at or leaving a saved place: the phones watch these places themselves.
+    const placeAlerts = await db
+      .select({ taskId: tasks.id, title: tasks.title, on: tasks.placeOn, placeId: places.id, name: places.name, lat: places.lat, lng: places.lng, radius: places.radiusM })
+      .from(tasks)
+      .innerJoin(places, eq(places.id, tasks.placeId))
+      .where(and(eq(tasks.userId, user.id), eq(tasks.status, "open"), isNotNull(tasks.placeId)))
+      .limit(20);
     const current = timed.find((i) => Date.parse(i.start) <= now && Date.parse(i.end) > now) ?? null;
     const next = timed.find((i) => Date.parse(i.start) > now) ?? null;
     return json({
@@ -86,6 +107,8 @@ export async function GET(req: Request) {
       items,
       alerts: alerts.map((a) => ({ id: `alert:${a.taskId}:${a.at}`, taskId: a.taskId, title: a.title, at: a.at })),
       brief,
+      checkIns,
+      placeAlerts: placeAlerts.map((p) => ({ id: `place:${p.taskId}:${p.on ?? "arrive"}`, taskId: p.taskId, title: p.title, on: p.on ?? "arrive", place: p.name, lat: p.lat, lng: p.lng, radius: p.radius })),
       now: current,
       next,
       problems: problems.map((p) => ({ email: p.email, message: p.message })),

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { AlertCircle, Bell, Check, ChevronDown, ChevronRight, CircleDashed, Link2, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { AlertCircle, Bell, Check, ChevronDown, ChevronRight, CircleDashed, Link2, MapPin, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import type { Category, Priority, Project, Task, TaskLink, TaskStatus } from "@/db/schema";
 import { PRIORITY_LABEL } from "@/lib/labels/core";
 import { Dori, type DoriMood } from "@/components/Dori";
@@ -17,7 +17,9 @@ type View = { kind: "area"; id: number | null } | { kind: "all" } | { kind: "loo
 
 const NO_AREA = { id: null, name: "No area", color: GRAPHITE };
 
-export function TasksBoard({ categories, projects, tasks, links, today }: { categories: Category[]; projects: Project[]; tasks: Task[]; links: TaskLink[]; today: string }) {
+type PlaceOption = { id: number; name: string };
+
+export function TasksBoard({ categories, projects, tasks, links, today, places = [] }: { categories: Category[]; projects: Project[]; tasks: Task[]; links: TaskLink[]; today: string; places?: PlaceOption[] }) {
   const [view, setView] = useState<View>({ kind: "all" });
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -39,7 +41,7 @@ export function TasksBoard({ categories, projects, tasks, links, today }: { cate
   const areaOf = (id: number | null) => (id === null ? NO_AREA : (categories.find((c) => c.id === id) ?? NO_AREA));
   const inView = (t: Task) => (view.kind === "area" ? t.categoryId === view.id : true);
   const visibleProjects = projects.filter((p) => (view.kind === "area" ? p.categoryId === view.id : true));
-  const ctx = { tasks, links, blocked, today, projects, categories, run, pending };
+  const ctx = { tasks, links, blocked, today, projects, categories, run, pending, places };
 
   const navItem = (label: string, active: boolean, onClick: () => void, extra?: React.ReactNode, color?: string) => (
     <button
@@ -172,6 +174,7 @@ export function TasksBoard({ categories, projects, tasks, links, today }: { cate
 }
 
 type Ctx = {
+  places: PlaceOption[];
   tasks: Task[];
   links: TaskLink[];
   blocked: Set<number>;
@@ -305,10 +308,11 @@ function TaskRow({ task, ...ctx }: Ctx & { task: Task }) {
             </form>
           )}
           {task.status === "good_enough" && task.residue && <p className="text-xs text-accent-soft">Left: {task.residue}</p>}
-          {(due || task.estimateMinutes || task.priority === "high" || blocked || after.length > 0 || together > 0 || task.kind === "reminder" || task.people.length > 0 || task.remindAt || task.repeat || task.waitingOn || task.checklist.length > 0) && !done && (
+          {(due || task.estimateMinutes || task.priority === "high" || blocked || after.length > 0 || together > 0 || task.kind === "reminder" || task.people.length > 0 || task.remindAt || task.repeat || task.waitingOn || task.checklist.length > 0 || task.placeId) && !done && (
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-faint">
               {task.kind === "reminder" && !task.remindAt && <span className="inline-flex items-center gap-1"><Bell size={11} /> reminder</span>}
               {task.remindAt && <span className="inline-flex items-center gap-1 tnum"><Bell size={11} /> {new Date(task.remindAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}
+              {task.placeId && <span className="inline-flex items-center gap-1"><MapPin size={11} /> {task.placeOn === "leave" ? "leaving" : "at"} {ctx.places.find((p) => p.id === task.placeId)?.name ?? "a place"}</span>}
               {task.repeat && <span>{repeatLabel(task.repeat)}</span>}
               {due && <span className={due.tone === "overdue" ? "text-danger" : due.tone === "soon" ? "text-warning" : ""}>{task.hardDeadline ? "Deadline " : "Due "}{due.text}</span>}
               {task.estimateMinutes ? <span className="tnum">{formatEstimate(task.estimateMinutes)}</span> : null}
@@ -435,7 +439,7 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
     id: task.id, projectId: task.projectId, categoryId: task.categoryId, title: task.title, notes: task.notes, kind: task.kind,
     estimateMinutes: task.estimateMinutes, dueDate: task.dueDate, hardDeadline: task.hardDeadline, priority: task.priority, energy: task.energy, people: task.people, repeat: task.repeat,
     remindTime: task.remindAt ? new Date(task.remindAt).toTimeString().slice(0, 5) : null,
-    waitingOn: task.waitingOn, checklist: task.checklist,
+    waitingOn: task.waitingOn, checklist: task.checklist, placeId: task.placeId, placeOn: task.placeOn,
   });
   const [step, setStep] = useState("");
   const [linkTo, setLinkTo] = useState("");
@@ -547,6 +551,26 @@ function TaskForm({ task, onDone, ...ctx }: Ctx & { task: Task; onDone: () => vo
         <label className="label">People involved</label>
         <input className="input" placeholder="Names or emails, comma separated" value={d.people?.join(", ") ?? ""} onChange={(e) => upd({ people: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
       </div>
+      {ctx.places.length > 0 && (
+        <div>
+          <label className="label">Alert at a place</label>
+          <div className="flex gap-2">
+            <select className="input min-w-0 flex-1" value={d.placeId ?? ""} onChange={(e) => upd({ placeId: e.target.value ? Number(e.target.value) : null, placeOn: e.target.value ? (d.placeOn ?? "arrive") : null })}>
+              <option value="">None</option>
+              {ctx.places.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {d.placeId && (
+              <select className="input w-28" value={d.placeOn ?? "arrive"} onChange={(e) => upd({ placeOn: e.target.value as "arrive" | "leave" })} aria-label="When">
+                <option value="arrive">Arriving</option>
+                <option value="leave">Leaving</option>
+              </select>
+            )}
+          </div>
+          <p className="help">On your phone, with the Midore app.</p>
+        </div>
+      )}
       <div>
         <label className="label">Waiting on</label>
         <input className="input" placeholder="Someone or something" maxLength={120} value={d.waitingOn ?? ""} onChange={(e) => upd({ waitingOn: e.target.value || null })} />

@@ -7,7 +7,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
 import {
-  db, categories, dayNotes, pinnedBlocks, projects, taskLinks, tasks, users,
+  db, categories, dayNotes, pinnedBlocks, places, projects, taskLinks, tasks, users,
   type DoriCard, type DoriProposal, type Task, type UndoOp, type User,
 } from "@/db";
 import type { ToolDef } from "../ai/client";
@@ -20,6 +20,7 @@ import { MAX_PROJECTS, MAX_TASKS, applyStatus, deferred, getTask, isComplete, li
 import { firstDueFor, isRepeat, parseRepeat } from "../tasks/repeat";
 import { eventsWithRefs, type EventRefs } from "./context";
 import { CALENDAR_TOOL_DEFS, CALENDAR_TOOL_STATUS, calendarExecutors } from "./tools-calendar";
+import { RULE_TOOL_DEFS, RULE_TOOL_STATUS, ruleExecutors } from "./tools-rules";
 
 export type ToolContext = {
   user: User;
@@ -65,6 +66,8 @@ const taskFields = {
   remind_at: opt(z.union([localDateTime, z.literal("none")])),
   waiting_on: opt(z.string().trim().max(120)),
   checklist: opt(z.array(z.union([z.string().trim().min(1).max(200), z.object({ text: z.string().trim().min(1).max(200), done: z.boolean().default(false) })])).max(30)),
+  place: opt(z.string().trim().max(60)),
+  place_on: opt(z.enum(["arrive", "leave"])),
 };
 const toChecklist = (list: (string | { text: string; done: boolean })[]) => list.map((i) => (typeof i === "string" ? { text: i, done: false } : i));
 
@@ -96,7 +99,19 @@ const taskProps = {
   remind_at: S.str("YYYY-MM-DDTHH:mm, user's local time: when to alert them (\"remind me at 6\", \"in 2 hours\"). \"none\" removes the alert"),
   waiting_on: S.str("Who or what it waits for (\"Ali's draft\"); it isn't planned until cleared. \"none\" clears it"),
   checklist: S.arr({ anyOf: [{ type: "string" }, S.obj({ text: S.str(), done: S.bool }, ["text", "done"])] }, "Small steps inside the task. On update this replaces the whole list: send every item with its done state"),
+  place: S.str("A saved place's name (see places): alert on the phone when arriving at or leaving it. \"none\" removes it"),
+  place_on: S.enum(["arrive", "leave"], "With place; default arrive"),
 };
+
+/** A place alert from a task's place fields: the saved place's id, null to remove, or an error. */
+async function placeFor(userId: number, name: string | undefined): Promise<number | null | undefined | string> {
+  if (name === undefined) return undefined;
+  if (!name || name.toLowerCase() === "none") return null;
+  const list = await db.select({ id: places.id, name: places.name }).from(places).where(eq(places.userId, userId));
+  const found = list.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (found) return found.id;
+  return `Error: no saved place called "${name}". ${list.length ? `Saved places: ${list.map((p) => p.name).join(", ")}.` : "No places are saved yet."} The user adds one under Settings › Places (on the phone: Use where I am now).`;
+}
 
 const TASK_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "propose_plan", description: "For a brain dump or setting up many things at once: propose areas, projects and tasks for the user to review. Nothing is created until they accept. Reuse existing area and project names where they fit.", parameters: S.obj({
@@ -110,7 +125,7 @@ const TASK_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "set_task_status", description: "Mark a task done, good enough (mostly done, with a short note of what's left), dropped, or open again. skip = drop only this occurrence of a repeating task; the next one is created.", parameters: S.obj({ id: S.int(), status: S.enum(["done", "good_enough", "dropped", "open", "skip"]), residue: S.str("What is left, for good_enough") }, ["id", "status"]) } },
   { type: "function", function: { name: "delete_tasks", description: "Delete tasks the user asked to remove.", parameters: S.obj({ ids: S.arr(S.int()) }, ["ids"]) } },
   { type: "function", function: { name: "create_project", description: "Create a project under an area.", parameters: S.obj({ name: S.str(), area: idOrName("Area"), target_date: S.str("YYYY-MM-DD"), notes: S.str() }, ["name"]) } },
-  { type: "function", function: { name: "update_project", description: "Rename a project, move it to another area, change its target date or notes, or pause or finish it. A paused project's work is not planned; paused_until resumes it on that day.", parameters: S.obj({ id: S.int(), name: S.str(), area: idOrName("Area"), target_date: S.str("YYYY-MM-DD"), notes: S.str(), status: S.enum(["active", "paused", "done"]), paused_until: S.str("YYYY-MM-DD") }, ["id"]) } },
+  { type: "function", function: { name: "update_project", description: "Rename a project, move it to another area, change its target date or notes, or pause or finish it. A paused project's work is not planned; paused_until resumes it on that day; paused_from pauses it from a later day (\"after the semester ends\").", parameters: S.obj({ id: S.int(), name: S.str(), area: idOrName("Area"), target_date: S.str("YYYY-MM-DD"), notes: S.str(), status: S.enum(["active", "paused", "done"]), paused_until: S.str("YYYY-MM-DD"), paused_from: S.str("YYYY-MM-DD, or \"none\" to cancel") }, ["id"]) } },
   { type: "function", function: { name: "delete_project", description: "Delete a project and all its tasks. Only when the user asked to delete it (finishing or pausing keeps it).", parameters: S.obj({ id: S.int() }, ["id"]) } },
   { type: "function", function: { name: "create_area", description: "Create a new area of life (e.g. Research, Home). Areas also colour the calendar.", parameters: S.obj({ name: S.str(), description: S.str() }, ["name"]) } },
   { type: "function", function: { name: "update_area", description: "Rename an area, change its description or colour.", parameters: S.obj({ id: S.int(), name: S.str(), description: S.str(), color: S.str("A colour name (red, orange, yellow, green, teal, blue, purple, pink, brown, grey) or #rrggbb") }, ["id"]) } },
@@ -156,7 +171,7 @@ const TASK_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "draft_emails", description: "Prepare emails to the attendees of some events (to cancel or move them). The app adds the recipients; the user sends them from their own mail app.", parameters: S.obj({ event_refs: S.arr(S.str()), subject: S.str(), body: S.str("Signed with the user's first name") }, ["event_refs", "subject", "body"]) } },
 ];
 
-export const TOOL_DEFS: ToolDef[] = [...TASK_TOOL_DEFS, ...CALENDAR_TOOL_DEFS];
+export const TOOL_DEFS: ToolDef[] = [...TASK_TOOL_DEFS, ...RULE_TOOL_DEFS, ...CALENDAR_TOOL_DEFS];
 
 // --- Helpers ----------------------------------------------------------------------------------------------
 
@@ -232,6 +247,11 @@ const executors: Record<string, Exec> = {
         out.push(`"${t.title}": no area called ${JSON.stringify(t.area)}`);
         continue;
       }
+      const placeId = await placeFor(ctx.user.id, t.place);
+      if (typeof placeId === "string") {
+        out.push(`"${t.title}": ${placeId}`);
+        continue;
+      }
       // A nudge ("every 2 hours") is a reminder whose alerts come from its rule.
       const nudge = t.repeat?.startsWith("hours:");
       const kind = nudge ? "reminder" : (t.kind ?? "task");
@@ -246,7 +266,7 @@ const executors: Record<string, Exec> = {
           estimateMinutes: kind === "reminder" ? null : (t.estimate_minutes ?? null), dueDate, hardDeadline: t.hard_deadline ?? false,
           priority: t.priority ?? "normal", energy: t.energy ?? null, people: t.people ?? [], repeat: t.repeat ?? null,
           remindAt: remindAt?.isValid ? remindAt.toJSDate() : null, waitingOn: t.waiting_on && t.waiting_on !== "none" ? t.waiting_on : null,
-          checklist: toChecklist(t.checklist ?? []), position: position++,
+          checklist: toChecklist(t.checklist ?? []), placeId: placeId ?? null, placeOn: placeId ? (t.place_on ?? "arrive") : null, position: position++,
         })
         .returning({ id: tasks.id });
       ctx.undo.push({ op: "deleteTask", id: row.id });
@@ -283,6 +303,12 @@ const executors: Record<string, Exec> = {
     if (a.progress !== undefined) fields.progress = a.progress;
     if (a.waiting_on !== undefined) fields.waitingOn = a.waiting_on === "none" || !a.waiting_on ? null : a.waiting_on;
     if (a.checklist !== undefined) fields.checklist = toChecklist(a.checklist);
+    const placeId = await placeFor(ctx.user.id, a.place);
+    if (typeof placeId === "string") return placeId;
+    if (placeId !== undefined) {
+      fields.placeId = placeId;
+      fields.placeOn = placeId ? (a.place_on ?? "arrive") : null;
+    } else if (a.place_on !== undefined && task.placeId) fields.placeOn = a.place_on;
     if (a.remind_at !== undefined) {
       const at = a.remind_at === "none" ? null : localInstant(ctx.user, a.remind_at.slice(0, 10), a.remind_at.slice(11));
       if (at && !at.isValid) return "Error: invalid alert time.";
@@ -355,7 +381,7 @@ const executors: Record<string, Exec> = {
   },
 
   async update_project(ctx, raw) {
-    const a = z.object({ id: z.number().int(), name: opt(z.string().trim().min(1).max(120)), area: opt(z.union([z.number().int(), z.string().max(60)])), target_date: opt(day), notes: opt(z.string().max(2000)), status: opt(z.enum(["active", "paused", "done"])), paused_until: opt(day) }).parse(raw);
+    const a = z.object({ id: z.number().int(), name: opt(z.string().trim().min(1).max(120)), area: opt(z.union([z.number().int(), z.string().max(60)])), target_date: opt(day), notes: opt(z.string().max(2000)), status: opt(z.enum(["active", "paused", "done"])), paused_until: opt(day), paused_from: opt(z.union([day, z.literal("none")])) }).parse(raw);
     const [p] = await db.select().from(projects).where(and(eq(projects.id, a.id), eq(projects.userId, ctx.user.id))).limit(1);
     if (!p) return "Error: no such project.";
     const fields: Record<string, unknown> = {};
@@ -366,10 +392,22 @@ const executors: Record<string, Exec> = {
       fields.status = a.status;
       fields.completedAt = a.status === "done" ? (p.completedAt ?? new Date()) : null;
       if (a.status !== "paused") fields.pausedUntil = null;
+      if (a.status === "done") fields.pausedFrom = null;
     }
-    if (a.paused_until !== undefined) {
+    if (a.paused_from !== undefined) {
+      const today = todayIn(ctx.user.timezone);
+      if (a.paused_from === "none") fields.pausedFrom = null;
+      else if (a.paused_from <= today) fields.status = "paused";
+      else {
+        fields.pausedFrom = a.paused_from;
+        if (p.status === "paused") fields.status = "active";
+      }
+      if (a.paused_until !== undefined && a.paused_until <= (a.paused_from === "none" ? today : a.paused_from)) return "Error: paused_until must come after paused_from.";
+      if (a.paused_until !== undefined) fields.pausedUntil = a.paused_until;
+    } else if (a.paused_until !== undefined) {
       fields.status = "paused";
       fields.pausedUntil = a.paused_until;
+      fields.pausedFrom = null;
     }
     if (a.area !== undefined) {
       const area = resolveArea(await listCategories(ctx.user.id), a.area);
@@ -743,7 +781,7 @@ export async function deleteAreaConfirmed(userId: number, id: number): Promise<U
 }
 
 export async function runTool(ctx: ToolContext, name: string, argsJson: string): Promise<string> {
-  const exec = executors[name] ?? calendarExecutors[name];
+  const exec = executors[name] ?? ruleExecutors[name] ?? calendarExecutors[name];
   if (!exec) return `Error: unknown tool ${name}.`;
   let args: unknown;
   try {
@@ -785,6 +823,7 @@ export const TOOL_STATUS: Record<string, string> = {
   check_capacity: "Checking your capacity",
   list_meetings: "Looking at your calendar",
   draft_emails: "Drafting emails",
+  ...RULE_TOOL_STATUS,
   ...CALENDAR_TOOL_STATUS,
 };
 

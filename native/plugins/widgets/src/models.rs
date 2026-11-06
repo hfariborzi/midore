@@ -37,6 +37,25 @@ pub struct Activity {
     pub next_start: Option<String>,
 }
 
+/// A place the phone watches: a notification when the person arrives (or leaves).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceFence {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub lat: f64,
+    pub lng: f64,
+    /// metres
+    pub radius: f64,
+    pub on_arrive: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlaceFencesArgs {
+    pub fences: Vec<PlaceFence>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ActivityArgs {
     pub activity: Option<Activity>,

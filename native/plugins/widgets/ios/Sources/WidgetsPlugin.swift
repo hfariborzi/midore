@@ -36,6 +36,12 @@ class WidgetsPlugin: Plugin, ASWebAuthenticationPresentationContextProviding {
     }
   }
 
+  /// Replace the places the phone watches for arriving and leaving alerts.
+  @objc public func setPlaceAlerts(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(PlaceFencesArgs.self)
+    PlaceAlerts.set(args.fences) { invoke.resolve() }
+  }
+
   /// Sign-in in Apple's in-app browser sheet. It shares Safari's cookies, and closes by itself when the page
   /// sends the person to a `midore://` link, which comes back here.
   @objc public func authenticate(_ invoke: Invoke) throws {

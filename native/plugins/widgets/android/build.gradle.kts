@@ -32,5 +32,7 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.9.0")
     implementation("androidx.browser:browser:1.8.0")
+    // Geofences for place alerts ("remind me when I get home").
+    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation(project(":tauri-android"))
 }

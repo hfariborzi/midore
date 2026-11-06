@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DateTime } from "luxon";
-import { describeMoves, freeMinutesUntil, meetingSlots, nextDue, plan, type PlanInput, type PlanTask } from "./core.ts";
+import { describeMoves, freeMinutesUntil, meetingSlots, nextDue, pauseFromRules, plan, type PlanInput, type PlanTask } from "./core.ts";
 
 const TZ = "America/Edmonton";
 const weekdays9to5 = { "1": [{ start: "09:00", end: "17:00" }], "2": [{ start: "09:00", end: "17:00" }], "3": [{ start: "09:00", end: "17:00" }], "4": [{ start: "09:00", end: "17:00" }], "5": [{ start: "09:00", end: "17:00" }], "6": [], "7": [] };
@@ -140,4 +140,18 @@ test("a buffer after meetings and a lunch window kept free", () => {
     rules: [{ day: "2026-10-12", bufferMinutes: 15 }, { day: "2026-10-12", window: { start: "12:00", end: "13:00" }, maxWorkMinutes: 0 }],
   }));
   assert.deepEqual(out.blocks.map((b) => [local(b.start), local(b.end)]), [["Mon 10:15", "Mon 12:00"], ["Mon 13:00", "Mon 14:15"]]);
+});
+
+test("work from a project paused from a later day is planned only before that day", () => {
+  const rules = pauseFromRules([{ id: 7, status: "active", pausedFrom: "2026-10-13", pausedUntil: "2026-10-15" }, { id: 8, status: "paused", pausedFrom: "2026-10-12", pausedUntil: null }], [{ id: 1, projectId: 7 }, { id: 2, projectId: 8 }, { id: 3, projectId: null }], TZ, MON.toMillis(), 5);
+  assert.deepEqual(rules.map((r) => [r.day, r.skipTaskIds]), [["2026-10-13", [1]], ["2026-10-14", [1]]]);
+  const out = plan(base({ busy: [iv("2026-10-12T09:00", "17:00")], tasks: [t(1, { projectId: 7 })], rules }));
+  assert.equal(local(out.blocks[0].start), "Thu 09:00");
+});
+
+test("with equal deadlines and priority, work from higher-ranked projects goes first; unranked after", () => {
+  const out = plan(base({ tasks: [t(1, { projectId: 5, rank: null }), t(2, { projectId: 6, rank: 2 }), t(3, { projectId: 7, rank: 1 })] }));
+  assert.deepEqual(out.blocks.map((b) => b.taskId), [3, 2, 1]);
+  const urgent = plan(base({ tasks: [t(1, { priority: "high" }), t(2, { rank: 1 })] }));
+  assert.deepEqual(urgent.blocks.map((b) => b.taskId), [1, 2]);
 });

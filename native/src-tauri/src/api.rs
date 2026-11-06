@@ -107,6 +107,21 @@ pub struct Brief {
     pub body: String,
 }
 
+/// An alert on arriving at or leaving a saved place (phones watch the place themselves).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceAlert {
+    pub id: String,
+    pub task_id: i64,
+    pub title: String,
+    /// "arrive" or "leave"
+    pub on: String,
+    pub place: String,
+    pub lat: f64,
+    pub lng: f64,
+    pub radius: f64,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Agenda {
     pub items: Vec<Item>,
@@ -114,6 +129,11 @@ pub struct Agenda {
     pub alerts: Vec<Alert>,
     #[serde(default)]
     pub brief: Option<Brief>,
+    /// Other times Dori speaks first (a Sunday review, an end-of-day wrap-up); same shape as the brief.
+    #[serde(default, rename = "checkIns")]
+    pub check_ins: Vec<Brief>,
+    #[serde(default, rename = "placeAlerts")]
+    pub place_alerts: Vec<PlaceAlert>,
     pub now: Option<Item>,
     pub next: Option<Item>,
 }

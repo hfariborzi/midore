@@ -26,7 +26,7 @@ Visitors arrive from colleagues' recommendations, comparison searches and launch
 
 ## Capabilities and Constraints
 
-- Shipped: booking pages, multi-account Google and Microsoft calendars, calendar (week/day; month with a day list on phones), categories, tasks and projects with "good enough" and partial progress, deterministic planner, Dori (text and voice, puppy or kitten), calendar push sync. Native apps (Tauri 2) for Mac and Linux, and iPhone and Android builds, with widgets, a menu bar calendar, quick add from anywhere, on-device reminders, an iPhone Live Activity and Share to Midore.
+- Shipped: booking pages, multi-account Google and Microsoft calendars, calendar (week/day; month with a day list on phones), categories, tasks and projects with "good enough" and partial progress, deterministic planner, Dori (text and voice, puppy or kitten; reminders at a time or a place, habits, check-ins such as a Sunday review, rules like "every time I finish a chapter, add a review"), calendar push sync. Native apps (Tauri 2) for Mac and Linux, and iPhone and Android builds, with widgets, a menu bar calendar, quick add from anywhere, on-device reminders, an iPhone Live Activity and Share to Midore.
 - Not built: billing and paid plans, emails sent by Midore, server push, data export, team features, store listings for the apps, a Windows build. Microsoft sign-in is built but not enabled in production.
 - Stack: Next.js 16 (App Router), React 19, Tailwind 4, hosted on Vercel.
 - Google sign-in buttons must follow Google's branding rules.

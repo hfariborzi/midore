@@ -11,7 +11,10 @@ import { DevicesSettings } from "./DevicesSettings";
 import { listDevices } from "@/lib/native";
 import { appleEnabled } from "@/lib/apple";
 import { and, eq } from "drizzle-orm";
-import { db, loginIdentities } from "@/db";
+import { db, loginIdentities, places } from "@/db";
+import { listAutomations } from "@/lib/automations";
+import { checkInLabel } from "@/lib/dori/brief";
+import { PlacesSettings, RoutinesSettings } from "./RoutinesSettings";
 import { SignInSettings } from "./SignInSettings";
 
 export const metadata = { title: "Settings" };
@@ -23,13 +26,15 @@ export default async function SettingsPage(props: PageProps<"/dashboard/settings
   const sp = await props.searchParams;
   const accounts = await listAccounts(user.id);
   const groups = await calendarsForAccounts(accounts);
-  const [cats, rules, usage, defaults, devices, [apple]] = await Promise.all([
+  const [cats, rules, usage, defaults, devices, [apple], automationRows, placeRows] = await Promise.all([
     ensureCategories(user.id),
     listRules(user.id),
     aiConfigured() ? usageThisMonth(user.id) : { events: 0, requests: 0 },
     ensureDefaults(user),
     listDevices(user.id),
     db.select().from(loginIdentities).where(and(eq(loginIdentities.userId, user.id), eq(loginIdentities.provider, "apple"))).limit(1),
+    listAutomations(user.id),
+    db.select({ id: places.id, name: places.name, radiusM: places.radiusM }).from(places).where(eq(places.userId, user.id)),
   ]);
 
   return (
@@ -56,6 +61,13 @@ export default async function SettingsPage(props: PageProps<"/dashboard/settings
       />
       <SignInSettings apple={appleEnabled()} linkedEmail={apple ? apple.email : null} privateEmail={!!apple?.privateEmail} flash={sp.linked === "apple" ? "Apple linked. You can now sign in with Apple." : null} />
       <DoriSettings available={aiConfigured()} enabled={!!user.doriConsentAt} nickname={user.doriPrefs?.nickname ?? ""} character={user.doriPrefs?.character ?? "puppy"} briefAt={user.doriPrefs?.briefAt ?? null} workHours={user.workHours} availabilityHours={defaults.schedule.weekly} />
+      {aiConfigured() && user.doriConsentAt && (
+        <RoutinesSettings
+          rules={automationRows.map((r) => ({ id: r.id, label: r.label, enabled: r.enabled, runs: r.runs, lastRunAt: r.lastRunAt?.toISOString() ?? null, oneOff: r.trigger.on === "not_done_by" }))}
+          checkIns={(user.doriPrefs?.checkIns ?? []).map((c) => ({ id: c.id, label: checkInLabel(c) }))}
+        />
+      )}
+      <PlacesSettings initial={placeRows} />
       <CategoriesSettings categories={cats} rules={rules} />
       <AiSettings configured={aiConfigured()} providerName={AI_PROVIDER_NAME} enabled={!!user.aiConsentAt} usage={usage} hasCategories={cats.length > 0} />
       <DevicesSettings devices={devices.map((d) => ({ ...d, createdAt: d.createdAt.toISOString(), lastUsedAt: d.lastUsedAt?.toISOString() ?? null }))} />

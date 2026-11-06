@@ -6,6 +6,7 @@ import {
   boolean,
   timestamp,
   jsonb,
+  doublePrecision,
   type AnyPgColumn,
   uniqueIndex,
   index,
@@ -58,6 +59,17 @@ export type DoriPrefs = {
   language?: string | null; // Dori always answers in this language; null = the language of the last message
   style?: string | null; // how Dori talks, in the user's words ("shorter", "like a coach")
   dueHeadsUpDays?: number | null; // an alert this many days before every due date, at 9 am
+  checkIns?: CheckIn[]; // times Dori speaks first besides the morning brief
+};
+
+/** Dori speaking first at a set time: a notification, and on the web Dori opens with that conversation. */
+export type CheckInTopic = "week_review" | "day_wrap" | "habits" | "custom";
+export type CheckIn = {
+  id: string; // short, stable
+  weekdays: number[]; // 1 = Monday … 7 = Sunday; empty = every day
+  at: string; // HH:mm in the user's time zone
+  topic: CheckInTopic;
+  text?: string; // for custom: what Dori should ask or do ("ask how the thesis is going")
 };
 
 /** Soft preferences shown to invitees; they never remove a slot. */
@@ -235,7 +247,9 @@ export const projects = pgTable(
     status: text("status").$type<ProjectStatus>().notNull().default("active"),
     targetDate: text("target_date"), // YYYY-MM-DD, optional
     pausedUntil: text("paused_until"), // YYYY-MM-DD: a paused project counts as active again from this day
+    pausedFrom: text("paused_from"), // YYYY-MM-DD: an active project pauses on this day (until pausedUntil, if set)
     position: integer("position").notNull().default(0),
+    rank: integer("rank"), // importance the user gave (1 = most); ranked projects' work is planned first. null = unranked
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
@@ -274,6 +288,8 @@ export const tasks = pgTable(
     deferCount: integer("defer_count").notNull().default(0), // times the due date was pushed later
     waitingOn: text("waiting_on"), // a person or thing this is waiting for; not planned until cleared
     checklist: jsonb("checklist").$type<ChecklistItem[]>().notNull().default([]), // small steps inside the task
+    placeId: integer("place_id").references((): AnyPgColumn => places.id, { onDelete: "set null" }), // alert at a place (phones)
+    placeOn: text("place_on").$type<PlaceTrigger>(), // arrive | leave
     position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -281,6 +297,62 @@ export const tasks = pgTable(
   },
   (t) => [index("tasks_user_status_idx").on(t.userId, t.status), index("tasks_project_idx").on(t.projectId), index("tasks_remind_idx").on(t.remindAt)],
 );
+
+export type PlaceTrigger = "arrive" | "leave";
+
+/**
+ * Places the user saved (Home, Work) for alerts on arriving or leaving. The phone apps watch them; Dori sees only
+ * their names, never where they are.
+ */
+export const places = pgTable(
+  "places",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    lat: doublePrecision("lat").notNull(),
+    lng: doublePrecision("lng").notNull(),
+    radiusM: integer("radius_m").notNull().default(150),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("places_user_idx").on(t.userId)],
+);
+export type Place = typeof places.$inferSelect;
+
+/**
+ * Rules the user set up ("every time I finish a chapter, add a review with my supervisor"; "if the review isn't
+ * done by Wednesday, drop it"). task_done runs when a matching task is finished; not_done_by runs once, in the
+ * daily job after that day, if the task is still open.
+ */
+export type AutomationTrigger =
+  | { on: "task_done"; projectId?: number | null; areaId?: number | null; titleHas?: string | null }
+  | { on: "not_done_by"; taskId: number; day: string };
+export type AutomationAction =
+  | { do: "create_task"; title: string; projectId?: number | null; areaId?: number | null; dueInDays?: number | null; estimateMinutes?: number | null; priority?: Priority | null }
+  | { do: "drop" }
+  | { do: "set_priority"; priority: Priority }
+  | { do: "move_due"; days: number }
+  | { do: "remind"; text?: string | null };
+export const automations = pgTable(
+  "automations",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    label: text("label").notNull(), // the rule in the user's words, shown in Settings
+    trigger: jsonb("trigger").$type<AutomationTrigger>().notNull(),
+    action: jsonb("action").$type<AutomationAction>().notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    runs: integer("runs").notNull().default(0),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("automations_user_idx").on(t.userId)],
+);
+export type Automation = typeof automations.$inferSelect;
 
 /** Ordering and grouping between tasks. */
 export const taskLinks = pgTable(
@@ -455,7 +527,9 @@ export type UndoOp =
   | { op: "patchEventType"; id: number; fields: Record<string, unknown> }
   | { op: "patchSchedule"; id: number; fields: Record<string, unknown> }
   | { op: "deleteEventType"; id: number }
-  | { op: "deleteSchedule"; id: number };
+  | { op: "deleteSchedule"; id: number }
+  | { op: "deleteAutomation"; id: number }
+  | { op: "restoreAutomation"; row: Record<string, unknown> };
 
 export const doriActions = pgTable(
   "dori_actions",

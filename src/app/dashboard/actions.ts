@@ -7,7 +7,7 @@ import { redirect } from "next/navigation";
 import { and, eq, ne } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { db, users, schedules, eventTypes, bookings, calendarAccounts, categories, labelRules, eventLabels, projects, tasks, taskLinks, loginIdentities, type CalendarPrefs, type Priority } from "@/db";
+import { db, users, schedules, eventTypes, bookings, calendarAccounts, categories, labelRules, eventLabels, projects, tasks, taskLinks, loginIdentities, places, type CalendarPrefs, type Priority } from "@/db";
 import { appleRevoke } from "@/lib/apple";
 import { aiConfigured, proposeCategories, toSample } from "@/lib/ai";
 import { eventsForAccounts } from "@/lib/calendar";
@@ -551,6 +551,8 @@ const taskSchema = z.object({
   remindTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(), // HH:mm on the due day (today when none); null = no alert
   waitingOn: z.string().trim().max(120).nullable().optional().transform((v) => (v === "" ? null : v)),
   checklist: z.array(z.object({ text: z.string().trim().min(1).max(200), done: z.boolean() })).max(30).optional(),
+  placeId: z.number().int().nullable().optional(),
+  placeOn: z.enum(["arrive", "leave"]).nullable().optional(),
 });
 
 export type TaskInput = z.input<typeof taskSchema>;
@@ -578,6 +580,11 @@ export async function saveTask(input: TaskInput): Promise<ActionResult> {
     return { error: "Unknown area" };
   }
   if (data.kind === "reminder") data.estimateMinutes = null;
+  if (data.placeId) {
+    const [place] = await db.select({ id: places.id }).from(places).where(and(eq(places.id, data.placeId), eq(places.userId, user.id))).limit(1);
+    if (!place) return { error: "Unknown place" };
+    data.placeOn = data.placeOn ?? "arrive";
+  } else if (data.placeId === null) data.placeOn = null;
   if (id) {
     const current = await getTask(user.id, id);
     if (!current) return { error: "Task not found" };

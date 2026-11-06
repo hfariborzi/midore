@@ -49,6 +49,7 @@ export const CALENDAR_TOOL_DEFS: ToolDef[] = [
   { type: "function", function: { name: "respond_to_invite", description: "Offer to accept, decline or say maybe to an invitation the user got; the organizer is told when the user confirms.", parameters: S.obj({
     event_ref: S.str("e.g. e3"), response: S.enum(["accepted", "declined", "tentative"]), comment: S.str("Optional short note to the organizer"),
   }, ["event_ref", "response"]) } },
+  { type: "function", function: { name: "event_details", description: "Who is invited to one meeting (names and their answers), who organized it, where it is and its video link. Only when the user asks about that meeting.", parameters: S.obj({ event_ref: S.str("e.g. e3") }, ["event_ref"]) } },
   { type: "function", function: { name: "read_calendar_feed", description: "Read a calendar link the user pasted (Canvas, D2L, Moodle, Outlook or any .ics / webcal link) and return its upcoming items, so you can propose_plan them as tasks with due dates.", parameters: S.obj({ url: S.str() }, ["url"]) } },
   { type: "function", function: { name: "time_report", description: "Where time went (or is going) between two days: meeting hours by area and by calendar, planned work hours by area, and tasks finished per area.", parameters: S.obj({ from_day: S.str("YYYY-MM-DD"), to_day: S.str("YYYY-MM-DD") }, ["from_day", "to_day"]) } },
   { type: "function", function: { name: "list_booking_pages", description: "The user's booking pages (the links people use to book time with them): title, lengths, link, on or off.", parameters: S.obj({}) } },
@@ -73,6 +74,7 @@ export const CALENDAR_TOOL_STATUS: Record<string, string> = {
   propose_calendar_event: "Preparing an event",
   propose_event_change: "Preparing the change",
   respond_to_invite: "Preparing your reply",
+  event_details: "Looking at that meeting",
   list_booking_pages: "Looking at your booking pages",
   read_calendar_feed: "Reading that calendar",
   time_report: "Adding up your time",
@@ -173,6 +175,28 @@ export const calendarExecutors: Record<string, Exec> = {
     if (!ev.attendees.length) return "Error: that event has no guests; it's the user's own. Use propose_event_change to move or delete it.";
     ctx.cards.push({ kind: "rsvp", response: a.response, comment: a.comment ?? "", title: ev.title, accountId: ev.accountId, calendarId: ev.calendarId, eventId: ev.id, start: ev.start, end: ev.end, status: "pending" });
     return "Shown to the user with a button to send the reply; nothing is sent until they press it.";
+  },
+
+  async event_details(ctx, raw) {
+    const a = z.object({ event_ref: z.string().max(10) }).parse(raw);
+    const ev = ctx.refs.get(a.event_ref);
+    if (!ev) return "Error: no such event; use a ref from the calendar data or list_meetings.";
+    const ANSWER: Record<string, string> = { needsAction: "not answered", accepted: "yes", declined: "no", tentative: "maybe", tentativelyAccepted: "maybe", organizer: "organizer" };
+    const mine = new Set((await listAccounts(ctx.user.id)).map((acc) => acc.email.toLowerCase()));
+    const guests = ev.attendees
+      .filter((x) => !x.email.endsWith("resource.calendar.google.com"))
+      .slice(0, 40)
+      .map((x) => ({ who: mine.has(x.email.toLowerCase()) ? "you" : x.name?.slice(0, 80) || x.email, ...(x.status && ANSWER[x.status] ? { answer: ANSWER[x.status] } : {}) }));
+    const rooms = ev.attendees.filter((x) => x.email.endsWith("resource.calendar.google.com")).map((x) => x.name).filter(Boolean);
+    return JSON.stringify({
+      title: ev.title,
+      ...(ev.organizer ? { organizer: ev.organizer.slice(0, 80) } : {}),
+      guests: guests.length ? guests : "none (just the user)",
+      ...(ev.attendees.length > 40 ? { more_guests: ev.attendees.length - 40 } : {}),
+      ...(ev.location || rooms.length ? { where: [ev.location, ...rooms].filter(Boolean).join("; ").slice(0, 300) } : {}),
+      ...(ev.meetLink ? { video_link: ev.meetLink } : {}),
+      ...(ev.htmlLink ? { open_in_calendar: ev.htmlLink } : {}),
+    });
   },
 
   async read_calendar_feed(ctx, raw) {

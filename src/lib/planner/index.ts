@@ -12,7 +12,7 @@ import type { Interval } from "../calendar/types";
 import { ensureDefaults } from "../data";
 import { logWarn } from "../log";
 import { listLinks, listProjects, listTasks } from "../tasks";
-import { describeMoves, freeMinutesUntil, HORIZON_DAYS, meetingSlots, plan as runPlan, type DayRule, type PlanInput, type PlanOutput } from "./core";
+import { describeMoves, freeMinutesUntil, HORIZON_DAYS, meetingSlots, pauseFromRules, plan as runPlan, type DayRule, type PlanInput, type PlanOutput } from "./core";
 
 export * from "./core";
 
@@ -115,6 +115,7 @@ export async function loadInputs(user: User, horizonDays = HORIZON_DAYS): Promis
   const projectTarget = new Map(projects.filter((p) => p.status !== "done" && p.targetDate).map((p) => [p.id, p.targetDate!]));
   const today = todayIn(tz);
   const paused = new Set(projects.filter((p) => isPaused(p, today)).map((p) => p.id));
+  const rank = new Map(projects.filter((p) => p.rank != null).map((p) => [p.id, p.rank!]));
   const input: PlanInput = {
     tz,
     now,
@@ -125,10 +126,10 @@ export async function loadInputs(user: User, horizonDays = HORIZON_DAYS): Promis
     // Work in a paused project waits until the project is active again; work waiting on someone waits for them.
     tasks: tasks
       .filter((t) => (!t.projectId || !paused.has(t.projectId)) && !t.waitingOn)
-      .map((t) => ({ id: t.id, title: t.title, estimateMinutes: remainingMinutes(t.estimateMinutes, t.progress), dueDate: t.dueDate ?? (t.projectId ? (projectTarget.get(t.projectId) ?? null) : null), hardDeadline: t.hardDeadline, priority: t.priority, energy: t.energy, status: t.status, kind: t.kind, position: t.position, projectId: t.projectId, categoryId: t.categoryId })),
+      .map((t) => ({ id: t.id, title: t.title, estimateMinutes: remainingMinutes(t.estimateMinutes, t.progress), dueDate: t.dueDate ?? (t.projectId ? (projectTarget.get(t.projectId) ?? null) : null), hardDeadline: t.hardDeadline, priority: t.priority, energy: t.energy, status: t.status, kind: t.kind, position: t.position, projectId: t.projectId, categoryId: t.categoryId, rank: t.projectId ? (rank.get(t.projectId) ?? null) : null })),
     links,
     pinned: pinned.map((p) => ({ taskId: p.taskId, start: p.start.getTime(), end: p.end.getTime() })),
-    rules: rulesFromNotes(notes, tz, now, horizonDays),
+    rules: [...rulesFromNotes(notes, tz, now, horizonDays), ...pauseFromRules(projects, tasks, tz, now, horizonDays)],
   };
   return { input, titles: new Map(tasks.map((t) => [t.id, t.title])), notes, calendarProblems: busyResult.problems };
 }

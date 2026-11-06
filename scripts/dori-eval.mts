@@ -71,6 +71,10 @@ const context = {
   notes: [{ id: 31, day: "always", text: "No meetings before 9" }],
   booking_hours: "Mon 09:00-17:00; Tue 09:00-17:00; Wed 09:00-17:00; Thu 09:00-17:00; Fri 09:00-16:00; Sat off; Sun off",
   booking_pages: [{ id: 41, title: "Office hours", minutes: [15] }, { id: 42, title: "30-minute chat", minutes: [30] }],
+  automations: [{ id: 51, rule: "When a task with \"chapter\" in Thesis is finished, add \"Review {task} with supervisor\"" }],
+  check_ins: [{ id: "k7a2", what: "Week review, Sun at 18:00" }],
+  morning_brief: "07:30",
+  places: ["Home", "Work"],
   changes_since_last_time: [],
 };
 
