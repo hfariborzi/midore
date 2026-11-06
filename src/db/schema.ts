@@ -222,6 +222,7 @@ export const aiUsage = pgTable(
     doriTurns: integer("dori_turns").notNull().default(0), // messages Dori answered
     voiceSeconds: integer("voice_seconds").notNull().default(0), // audio transcribed
     speechChars: integer("speech_chars").notNull().default(0), // characters read aloud
+    meetingSeconds: integer("meeting_seconds").notNull().default(0), // meeting audio transcribed
   },
   (t) => [uniqueIndex("ai_usage_user_day_idx").on(t.userId, t.day)],
 );
@@ -517,6 +518,38 @@ export const doriMessages = pgTable(
   },
   (t) => [index("dori_messages_user_idx").on(t.userId, t.id)],
 );
+
+// --- Meeting notes ----------------------------------------------------------------------------------------
+
+export type MeetingStatus = "recording" | "done";
+export type MeetingAction = { text: string; who: string; due?: string | null; taskId?: number | null };
+export type MeetingSummary = { summary: string[]; decisions: string[]; actions: MeetingAction[] };
+
+/**
+ * A meeting the user recorded or took notes in. Audio is transcribed a minute at a time and never stored; the
+ * transcript ("[mm:ss] text" lines), the user's own notes and Dori's summary are kept until the user deletes them.
+ */
+export const meetings = pgTable(
+  "meetings",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    eventKey: text("event_key"), // "<accountId>:<event key>" when it belongs to a calendar event
+    status: text("status").$type<MeetingStatus>().notNull().default("recording"),
+    recorded: boolean("recorded").notNull().default(true), // false = notes only, no audio
+    transcript: text("transcript").notNull().default(""),
+    notes: text("notes").notNull().default(""),
+    summary: jsonb("summary").$type<MeetingSummary>(),
+    seconds: integer("seconds").notNull().default(0), // audio transcribed
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (t) => [index("meetings_user_idx").on(t.userId, t.startedAt)],
+);
+export type Meeting = typeof meetings.$inferSelect;
 
 /** How to reverse one change Dori made. Applied newest first when the user presses Undo. */
 export type UndoOp =

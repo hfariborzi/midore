@@ -8,6 +8,7 @@ import { DORI_STATUS, type DoriStatusDetail } from "./DoriPanel";
 
 const TITLES: [string, string][] = [
   ["/dashboard/tasks", "Tasks"],
+  ["/dashboard/meetings", "Meetings"],
   ["/dashboard/settings", "Settings"],
 ];
 const BOOKING_TABS: [string, string][] = [

@@ -8,6 +8,7 @@ import { CalendarView } from "./CalendarView";
 import { DoriPanel } from "./DoriPanel";
 import { alertsSoon } from "@/lib/tasks";
 import { Overlay } from "./Overlay";
+import { MeetingRecorder } from "./MeetingRecorder";
 import { ReminderAlerts } from "./ReminderAlerts";
 import { TopBar } from "./TopBar";
 
@@ -59,6 +60,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
       </div>
       <Overlay>{children}</Overlay>
       <ReminderAlerts alerts={alerts} />
+      <MeetingRecorder />
     </DoriCharacterProvider>
   );
 }

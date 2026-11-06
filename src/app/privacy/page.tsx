@@ -167,6 +167,16 @@ export default function PrivacyPage() {
               ? `If you talk to Dori with the microphone, your recording is sent through OpenRouter to ElevenLabs to be turned into text; only the text is kept, as your message. If you have Dori read an answer aloud, the text of that answer is sent the same way to be turned into speech. Both requests are restricted to endpoints that keep no data (zero data retention) and do not use it for training, and ${APP_NAME} stores neither recordings nor audio.`
               : "Voice input, where available, uses your browser's own speech recognition, and reading answers aloud uses your browser's built-in voices."}
           </p>
+          <h3>Meeting notes</h3>
+          <p>
+            If you record a meeting, your browser records your microphone (and, if you choose, the sound of one browser
+            tab) and sends it a minute at a time through OpenRouter to ElevenLabs to be turned into text, on the same
+            zero-data-retention endpoints. The audio is never stored; {APP_NAME} keeps the transcript, the notes you type
+            and the summary, decisions and action items Dori writes from them (sent to the AI provider above), until you
+            delete the meeting. Recording happens only when you press Record; {APP_NAME} may offer to take notes when a
+            meeting on your calendar starts, but never records on its own. You are responsible for telling the people in
+            the meeting that you are recording and for any consent the law where you are requires.
+          </p>
         </>
       ) : (
         <p>Dori is not enabled on this instance; no task or calendar data is sent to any AI provider.</p>

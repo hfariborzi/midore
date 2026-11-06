@@ -47,6 +47,7 @@ targets:
       properties:
         LSRequiresIPhoneOS: true
         NSSupportsLiveActivities: true
+        NSMicrophoneUsageDescription: "Midore uses the microphone only when you talk to Dori or press Record to take meeting notes."
         NSLocationWhenInUseUsageDescription: "Midore uses your location only to alert you when you arrive at or leave a place you saved, like Home or Work."
         CFBundleURLTypes:
           - CFBundleURLName: app.midore

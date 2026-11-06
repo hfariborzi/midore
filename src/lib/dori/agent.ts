@@ -20,7 +20,7 @@ const HISTORY = 10;
 // calls can be used as is when every call succeeds, which saves a whole model round.
 const READ_TOOLS = new Set([
   "get_plan", "find_meeting_times", "check_capacity", "list_meetings", "propose_plan", "draft_emails", "propose_calendar_event",
-  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report", "event_details", "undo_last", "plan_history", "weather", "travel_time",
+  "propose_event_change", "respond_to_invite", "find_tasks", "habit_stats", "list_booking_pages", "list_bookings", "cancel_booking", "read_calendar_feed", "time_report", "event_details", "undo_last", "plan_history", "weather", "travel_time", "find_meetings", "meeting_notes",
 ]);
 
 export type DoriEvent =

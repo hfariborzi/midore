@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarClock, ExternalLink, ListChecks, LogOut, Settings, Sparkles } from "lucide-react";
+import { CalendarClock, ExternalLink, ListChecks, LogOut, Mic, Settings, Sparkles } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { CopyButton } from "@/components/CopyButton";
 import { FullLogo, LogoMark } from "@/components/Logo";
@@ -31,6 +31,7 @@ export function TopBar({ name, email, image, publicUrl }: { name: string; email:
 
   const items = [
     { href: "/dashboard/tasks", label: "Tasks", Icon: ListChecks, active: path.startsWith("/dashboard/tasks") },
+    { href: "/dashboard/meetings", label: "Meetings", Icon: Mic, active: path.startsWith("/dashboard/meetings") },
     { href: "/dashboard/event-types", label: "Booking", Icon: CalendarClock, active: BOOKING_PATHS.some((p) => path.startsWith(p)) },
     { href: "/dashboard/settings", label: "Settings", Icon: Settings, active: path.startsWith("/dashboard/settings") },
   ];
@@ -53,7 +54,7 @@ export function TopBar({ name, email, image, publicUrl }: { name: string; email:
       <div id={CALENDAR_CONTROLS_ID} className="order-last flex w-full min-w-0 items-center md:order-none md:ml-4 md:w-auto md:flex-1" />
 
       <nav className="ml-auto flex items-center gap-0.5 md:ml-0">
-        {items.slice(0, 2).map(({ href, label, Icon, active }) => (
+        {items.slice(0, 3).map(({ href, label, Icon, active }) => (
           <Link key={href} href={active ? "/dashboard" : href} scroll={false} className={btn(active)} aria-current={active ? "page" : undefined} title={label}>
             <Icon size={17} strokeWidth={1.75} />
             <span className="hidden lg:inline">{label}</span>
@@ -64,7 +65,7 @@ export function TopBar({ name, email, image, publicUrl }: { name: string; email:
           <span className="hidden lg:inline">Dori</span>
           {dori.news && !dori.open && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-amber" aria-label="News from Dori" />}
         </button>
-        {items.slice(2).map(({ href, label, Icon, active }) => (
+        {items.slice(3).map(({ href, label, Icon, active }) => (
           <Link key={href} href={active ? "/dashboard" : href} scroll={false} className={btn(active)} aria-current={active ? "page" : undefined} title={label}>
             <Icon size={17} strokeWidth={1.75} />
             <span className="hidden lg:inline">{label}</span>

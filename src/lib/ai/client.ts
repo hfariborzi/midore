@@ -82,8 +82,9 @@ export async function completeJson<T>(opts: {
   user: string;
   maxTokens: number;
   timeoutMs?: number;
+  model?: string; // default: the categorisation model
 }): Promise<{ data: T; usage: Usage }> {
-  const { model } = config();
+  const model = opts.model || config().model;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const base = {
     model,

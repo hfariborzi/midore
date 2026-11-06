@@ -64,6 +64,11 @@ if (!yml.includes("NSLocationWhenInUseUsageDescription")) {
   yml = yml.replace("        LSRequiresIPhoneOS: true\n", '        LSRequiresIPhoneOS: true\n        NSLocationWhenInUseUsageDescription: "Midore uses your location only to alert you when you arrive at or leave a place you saved, like Home or Work."\n');
 }
 
+// The microphone: talking to Dori and recording meeting notes in the app's web view.
+if (!yml.includes("NSMicrophoneUsageDescription")) {
+  yml = yml.replace("        LSRequiresIPhoneOS: true\n", '        LSRequiresIPhoneOS: true\n        NSMicrophoneUsageDescription: "Midore uses the microphone only when you talk to Dori or press Record to take meeting notes."\n');
+}
+
 // Live Activities: what's on now on the Lock Screen and in the Dynamic Island (started by the app).
 if (!yml.includes("NSSupportsLiveActivities")) {
   yml = yml.replace("        LSRequiresIPhoneOS: true\n", "        LSRequiresIPhoneOS: true\n        NSSupportsLiveActivities: true\n");
