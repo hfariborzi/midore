@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { checkFeedUrl, parseIcs } from "./feeds.ts";
 
-const TZ = "America/Edmonton";
+// A zone without daylight saving: Alberta's rules for November 2026 differ between tz database versions.
+const TZ = "America/Regina";
 const ICS = [
   "BEGIN:VCALENDAR",
   "BEGIN:VEVENT",
@@ -11,7 +12,7 @@ const ICS = [
   "END:VEVENT",
   "BEGIN:VEVENT",
   "SUMMARY:Quiz 4 (ECON 201)",
-  "DTSTART:20261110T063000Z",
+  "DTSTART:20261110T053000Z",
   "END:VEVENT",
   "BEGIN:VEVENT",
   "SUMMARY:Old thing",
@@ -35,7 +36,7 @@ test("reads upcoming events and to-dos from a calendar file", () => {
   assert.deepEqual(parseIcs(ICS, TZ, "2026-11-05"), [
     { title: "Quiz 4 (ECON 201)", day: "2026-11-09", time: "23:30", allDay: false },
     { title: "Assignment 3 , part B", day: "2026-11-12", allDay: true },
-    { title: "Final paper with a very long title that is folded onto the next line", day: "2026-12-04", time: "21:59", allDay: false },
+    { title: "Final paper with a very long title that is folded onto the next line", day: "2026-12-04", time: "22:59", allDay: false },
   ]);
 });
 
