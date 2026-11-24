@@ -67,6 +67,12 @@ export default async function EventPage(props: PageProps<"/[username]/[slug]">) 
       <PoweredBy>
         <Link href={`/${user.username}`} className="hover:text-ink">More from {user.name || user.username}</Link>
         <span aria-hidden>·</span>
+        {!rescheduleInfo && (
+          <>
+            <a href={`/api/booking-qr/${user.username}/${et.slug}`} download className="hover:text-ink">Download QR code</a>
+            <span aria-hidden>·</span>
+          </>
+        )}
       </PoweredBy>
     </main>
   );

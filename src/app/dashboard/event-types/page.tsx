@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Clock, Eye, Link2, Lock, Pencil, Plus, Users } from "lucide-react";
+import { Clock, Eye, Link2, Lock, Pencil, Plus, QrCode, Users } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { listEventTypes } from "@/lib/data";
 import { requestBaseUrl } from "@/lib/origin";
@@ -65,6 +65,11 @@ export default async function EventTypesPage() {
                       <span className="truncate">{url.replace(/^https?:\/\//, "")}</span>
                     </span>
                     <CopyButton text={url} className="btn-ghost px-2 py-1 text-xs" />
+                    {t.active && (
+                      <a href={`/api/booking-qr/${user.username}/${t.slug}`} download className="btn-ghost px-2 py-1 text-xs">
+                        <QrCode size={14} /> QR code PNG
+                      </a>
+                    )}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-1 pl-2 sm:pl-0">
